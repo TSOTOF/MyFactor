@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from factormodel.pre_process import standardize_stack
+from MyFactor.pre_process import standardize_stack
 
 
 def ic_cal_stack(df_stack,ic_lst,type = 'rank'):

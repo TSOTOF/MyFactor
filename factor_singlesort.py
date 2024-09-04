@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from factormodel.pre_process import panels2stack
+from MyFactor.pre_process import panels2stack
 
 def singlesort_id_t(df_t_stack,g):
     '''
