@@ -596,7 +596,7 @@ class MyFactor:
 
         参数:
 
-        trdlst:values为str,需要提取的列名列表,全部列名见base.stktrd
+        trdlst:values为str,需要提取的列名列表,全部列名见base.stktrd及base.fundtrd
 
         start,end:读取数据的起始和结束日期,格式为'%Y%m%d'
 
