@@ -42,7 +42,7 @@ class MyFactor:
         self.trdcalendar = self.gettrdcalendar(exchange)
         if loadtrd is not None:
             self.adjprice = {'stk':'adjclose','fund':'adjnav'}[loadtrd]
-            self.df_trd = self.getassettrd([self.adjprice,'size'],start,end)
+            self.df_trd = self.getassettrd(loadtrd,[self.adjprice,'size'],start,end)
         else:
             self.adjprice,self.df_trd = None,None
 
@@ -594,11 +594,13 @@ class MyFactor:
         conn.close()
         return factortabledict
 
-    def getassettrd(self,trdlst:List[str],start:str = None,end:str = None)->pd.DataFrame:
+    def getassettrd(self,assettype:str,trdlst:List[str],start:str = None,end:str = None)->pd.DataFrame:
         '''
         获取资产交易数据
 
         参数:
+
+        assettype:资产类别,'stk'或'fund'
 
         trdlst:values为str,需要提取的列名列表,全部列名见base.stktrd及base.fundtrd
 
@@ -612,16 +614,16 @@ class MyFactor:
         end = dt.datetime.strftime(dt.datetime.today().date(),format = '%Y%m%d') if end is None else end
         trdstr = '`' + '`,`'.join(trdlst) + '`'
         # 读取深交所交易日历和self.assettype交易数据
-        print(f'loading {self.assettype}trd data...')
+        print(f'loading {assettype}trd data...')
         timestart = time()
         conn = pymysql.connect(host = self.host,user = self.user,password = self.password,database = 'base',port = 3306,charset = 'utf8mb4')
         cursor = conn.cursor()
-        cursor.execute(f'SELECT `trddate`,`code`,{trdstr} FROM {self.assettype}trd WHERE `trddate` >= {start} and `trddate` <= {end} ORDER BY `trddate`,`code`')
+        cursor.execute(f'SELECT `trddate`,`code`,{trdstr} FROM {assettype}trd WHERE `trddate` >= {start} and `trddate` <= {end} ORDER BY `trddate`,`code`')
         df_trd = pd.DataFrame(cursor.fetchall(),columns = ['trddate','code'] + trdlst)
         cursor.close()
         conn.close()
         df_trd[trdlst] = df_trd[trdlst].astype(float)
-        print(f'{self.assettype}trd data loaded, {time() - timestart:.2f}s passed')
+        print(f'{assettype}trd data loaded, {time() - timestart:.2f}s passed')
         return df_trd
 
     def savefactor(self,df_factor:pd.DataFrame,tablename:str,if_exist:str = 'append'):
