@@ -40,7 +40,11 @@ class MyFactor:
         self.host,self.user,self.password,self.assettype = host,user,password,loadtrd
         self.factortabledict = self.getfactortables()
         self.trdcalendar = self.gettrdcalendar(exchange)
-        self.df_trd = self.getassettrd(['adjclose','size'],start,end) if loadtrd is not None else None
+        if loadtrd is not None:
+            self.adjprice = {'stk':'adjclose','fund':'adjnav'}[loadtrd]
+            self.df_trd = self.getassettrd([self.adjprice,'size'],start,end)
+        else:
+            self.adjprice,self.df_trd = None,None
 
     @staticmethod
     def cumret(ret:Union[list,np.array,pd.Series])->float:
@@ -512,7 +516,7 @@ class MyFactor:
         return df_downfreq_it
 
     @staticmethod
-    def matchret_t(df_window_t:pd.DataFrame,df_close:pd.DataFrame)->pd.DataFrame:
+    def matchret_t(df_window_t:pd.DataFrame,df_price:pd.DataFrame)->pd.DataFrame:
         '''
         (聚合函数,用于apply)根据当前再平衡日期,下一次再平衡日期匹配窗口期内股票的累计收益率
         
@@ -521,20 +525,20 @@ class MyFactor:
                 第1列为trddate:str,格式为'%Y%m%d'
                 第2列为nxtrebalance:str,下一次再平衡日期,格式为'%Y%m%d'
 
-            df_close:对应资产的收盘价数据,至少包含3列
+            df_price:对应资产的收盘价数据,至少包含3列
                 第1列为trddate:str,格式为'%Y%m%d'
                 第2列为code:str,资产代码
-                其中包含列'adjclose':资产复权收盘价
+                其中包含列self.adjprice:资产复权收盘价
 
         输出:
-            currret:df_close中包含的资产在trddate和nxtrebalance之间的收益率
+            currret:df_price中包含的资产在trddate和nxtrebalance之间的收益率
         '''
         start,end = df_window_t['trddate'].values[0],df_window_t['nxtrebalance'].values[0]
-        startclose = df_close.loc[df_close['trddate'] == start,['code','adjclose']]
-        endclose = df_close.loc[df_close['trddate'] == end,['code','adjclose']]
-        currret = startclose.rename(columns = {'adjclose':'startclose'}).\
-                    merge(endclose.rename(columns = {'adjclose':'endclose'}),on = 'code',how = 'outer')
-        currret['ret'] = currret['endclose']/currret['startclose'] - 1
+        startprice = df_price.loc[df_price['trddate'] == start,['code',self.adjprice]]
+        endprice = df_price.loc[df_price['trddate'] == end,['code',self.adjprice]]
+        currret = startprice.rename(columns = {self.adjprice:'startprice'}).\
+                    merge(endprice.rename(columns = {self.adjprice:'endprice'}),on = 'code',how = 'outer')
+        currret['ret'] = currret['endprice']/currret['startprice'] - 1
         currret.loc[:,['trddate','nxtrebalance']] = start,end
         currret = currret[['trddate','nxtrebalance','code','ret']]
         return currret
@@ -607,7 +611,7 @@ class MyFactor:
         start = '19900101' if start is None else start
         end = dt.datetime.strftime(dt.datetime.today().date(),format = '%Y%m%d') if end is None else end
         trdstr = '`' + '`,`'.join(trdlst) + '`'
-        # 读取深交所交易日历
+        # 读取深交所交易日历和self.assettype交易数据
         print(f'loading {self.assettype}trd data...')
         timestart = time()
         conn = pymysql.connect(host = self.host,user = self.user,password = self.password,database = 'base',port = 3306,charset = 'utf8mb4')
@@ -797,11 +801,11 @@ class MyFactor:
         # 取出收盘价,去掉日期不是再平衡交易日的数据
         df_window = df[['trddate','nxtrebalance']].drop_duplicates().reset_index(drop = True)
         rebalancelst = list(set(df_window['trddate'])|set(df_window['nxtrebalance']))
-        df_close = self.df_trd.loc[self.df_trd['trddate'].isin(rebalancelst),['trddate','code','adjclose']].dropna()
+        df_price = self.df_trd.loc[self.df_trd['trddate'].isin(rebalancelst),['trddate','code',self.adjprice]].dropna()
         # 找到再平衡交易日后,用再平衡交易日匹配收益率,此时df_factor每一行都是再平衡之前的因子值和再平衡之后时期的收益率
         tqdm.pandas(desc = 'match rebalance ret')
         df_window = df_window.groupby(['trddate','nxtrebalance'],group_keys = False)[['trddate','nxtrebalance']].\
-                        apply(lambda x: MyFactor.matchret_t(x,df_close),include_groups = False).dropna().reset_index(drop = True)
+                        apply(lambda x: MyFactor.matchret_t(x,df_price),include_groups = False).dropna().reset_index(drop = True)
         df_window.columns = ['trddate','nxtrebalance','code','ret']
         df = df.merge(df_window,on = ['trddate','nxtrebalance','code'],how = 'left')
         return df
