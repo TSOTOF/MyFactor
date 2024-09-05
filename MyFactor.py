@@ -596,7 +596,7 @@ class MyFactor:
 
         参数:
 
-        trdlst:values为str,需要提取的列名列表,全部列名见base.asharestktrd
+        trdlst:values为str,需要提取的列名列表,全部列名见base.stktrd
 
         start,end:读取数据的起始和结束日期,格式为'%Y%m%d'
 
@@ -612,7 +612,7 @@ class MyFactor:
         timestart = time()
         conn = pymysql.connect(host = self.host,user = self.user,password = self.password,database = 'base',port = 3306,charset = 'utf8mb4')
         cursor = conn.cursor()
-        cursor.execute(f'SELECT `trddate`,`code`,{trdstr} FROM ashare{self.assettype}trd WHERE `trddate` >= {start} and `trddate` <= {end} ORDER BY `trddate`,`code`')
+        cursor.execute(f'SELECT `trddate`,`code`,{trdstr} FROM {self.assettype}trd WHERE `trddate` >= {start} and `trddate` <= {end} ORDER BY `trddate`,`code`')
         df_trd = pd.DataFrame(cursor.fetchall(),columns = ['trddate','code'] + trdlst)
         cursor.close()
         conn.close()
