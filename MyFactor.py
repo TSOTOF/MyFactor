@@ -575,6 +575,33 @@ class MyFactor:
         conn.close()
         return trdcalendar
 
+    def endmonthmatch(self,trddatelst:Union[list,np.array,pd.Series])->pd.Series:
+        '''
+        把原始交易日转为月末交易日
+        
+        参数:
+
+            trddatelst:原始交易日列表,values为dt.datetime.date或'%Y%m%d'格式的日期
+
+        输出:
+
+            endmonthdatelst:输出的与原始交易日对应的月末交易日,values格式与输入格式保持一致
+        '''
+        endmonthcalendar = pd.DataFrame(self.gettrdcalendar('sz'),columns = ['endmonthdate'])
+        endmonthcalendar['yearmonth'] = endmonthcalendar['endmonthdate'].apply(lambda x: x[:6])
+        endmonthcalendar = endmonthcalendar.groupby('yearmonth',group_keys = False).apply(lambda x: x.iloc[-1,:],include_groups = False).reset_index()
+        df_trddate = pd.DataFrame(list(trddatelst),columns = ['trddate'])
+        match isinstance(trddatelst[0],str):
+            case True:
+                df_trddate['yearmonth'] = df_trddate['trddate'].apply(lambda x: x[:6])
+                df_trddate = df_trddate.merge(endmonthcalendar,on = 'yearmonth',how = 'left')
+                return list(df_trddate['endmonthdate'])
+            case False:
+                df_trddate['yearmonth'] = df_trddate['trddate'].apply(lambda x: dt.datetime.strftime(x,'%Y%m'))
+                df_trddate = df_trddate.merge(endmonthcalendar,on = 'yearmonth',how = 'left')
+                df_trddate['endmonthdate'] = df_trddate['endmonthdate'].apply(lambda x: dt.datetime.strptime(x,'%Y%m%d').date())
+                return list(df_trddate['endmonthdate'])
+
     def getfactortables(self)->Dict[str,List[str]]:
         '''获取全量因子表及因子名称'''
         conn = pymysql.connect(host = self.host,user = self.user,password = self.password,port = 3306,charset = 'utf8mb4')
@@ -613,7 +640,7 @@ class MyFactor:
         start = '19900101' if start is None else start
         end = dt.datetime.strftime(dt.datetime.today().date(),format = '%Y%m%d') if end is None else end
         trdstr = '`' + '`,`'.join(trdlst) + '`'
-        # 读取深交所交易日历和self.assettype交易数据
+        # 读取self.assettype交易数据
         print(f'loading {assettype}trd data...')
         timestart = time()
         conn = pymysql.connect(host = self.host,user = self.user,password = self.password,database = 'base',port = 3306,charset = 'utf8mb4')
