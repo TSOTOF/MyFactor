@@ -575,7 +575,7 @@ class MyFactor:
         conn.close()
         return trdcalendar
 
-    def endmonthmatch(self,trddatelst:Union[list,np.array,pd.Series])->pd.Series:
+    def endmonthmatch(self,trddatelst:Union[list,np.array,pd.Series])->list:
         '''
         把原始交易日转为月末交易日
         
