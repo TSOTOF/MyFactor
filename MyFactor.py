@@ -515,34 +515,6 @@ class MyFactor:
         # 输出
         return df_downfreq_it
 
-    @staticmethod
-    def matchret_t(df_window_t:pd.DataFrame,df_price:pd.DataFrame)->pd.DataFrame:
-        '''
-        (聚合函数,用于apply)根据当前再平衡日期,下一次再平衡日期匹配窗口期内股票的累计收益率
-        
-        参数:
-            df_window_t:t时期的日期和下一次再平衡日期,共1行2列
-                第1列为trddate:str,格式为'%Y%m%d'
-                第2列为nxtrebalance:str,下一次再平衡日期,格式为'%Y%m%d'
-
-            df_price:对应资产的收盘价数据,至少包含3列
-                第1列为trddate:str,格式为'%Y%m%d'
-                第2列为code:str,资产代码
-                其中包含列self.adjprice:资产复权收盘价
-
-        输出:
-            currret:df_price中包含的资产在trddate和nxtrebalance之间的收益率
-        '''
-        start,end = df_window_t['trddate'].values[0],df_window_t['nxtrebalance'].values[0]
-        startprice = df_price.loc[df_price['trddate'] == start,['code',self.adjprice]]
-        endprice = df_price.loc[df_price['trddate'] == end,['code',self.adjprice]]
-        currret = startprice.rename(columns = {self.adjprice:'startprice'}).\
-                    merge(endprice.rename(columns = {self.adjprice:'endprice'}),on = 'code',how = 'outer')
-        currret['ret'] = currret['endprice']/currret['startprice'] - 1
-        currret.loc[:,['trddate','nxtrebalance']] = start,end
-        currret = currret[['trddate','nxtrebalance','code','ret']]
-        return currret
-
     def getfactorname(self,tablename:Optional[str] = None)->Optional[list]:
         '''获取因子名,tablename = None时直接输出因子表名-因子名字典'''
         if tablename == None:
@@ -834,10 +806,37 @@ class MyFactor:
         # 找到再平衡交易日后,用再平衡交易日匹配收益率,此时df_factor每一行都是再平衡之前的因子值和再平衡之后时期的收益率
         tqdm.pandas(desc = 'match rebalance ret')
         df_window = df_window.groupby(['trddate','nxtrebalance'],group_keys = False)[['trddate','nxtrebalance']].\
-                        apply(lambda x: MyFactor.matchret_t(x,df_price),include_groups = False).dropna().reset_index(drop = True)
+                        apply(lambda x: self.matchret_t(x,df_price),include_groups = False).dropna().reset_index(drop = True)
         df_window.columns = ['trddate','nxtrebalance','code','ret']
         df = df.merge(df_window,on = ['trddate','nxtrebalance','code'],how = 'left')
         return df
+
+    def matchret_t(self,df_window_t:pd.DataFrame,df_price:pd.DataFrame)->pd.DataFrame:
+        '''
+        (聚合函数,用于apply)根据当前再平衡日期,下一次再平衡日期匹配窗口期内股票的累计收益率
+        
+        参数:
+            df_window_t:t时期的日期和下一次再平衡日期,共1行2列
+                第1列为trddate:str,格式为'%Y%m%d'
+                第2列为nxtrebalance:str,下一次再平衡日期,格式为'%Y%m%d'
+
+            df_price:对应资产的收盘价数据,至少包含3列
+                第1列为trddate:str,格式为'%Y%m%d'
+                第2列为code:str,资产代码
+                其中包含列self.adjprice:资产复权收盘价
+
+        输出:
+            currret:df_price中包含的资产在trddate和nxtrebalance之间的收益率
+        '''
+        start,end = df_window_t['trddate'].values[0],df_window_t['nxtrebalance'].values[0]
+        startprice = df_price.loc[df_price['trddate'] == start,['code',self.adjprice]]
+        endprice = df_price.loc[df_price['trddate'] == end,['code',self.adjprice]]
+        currret = startprice.rename(columns = {self.adjprice:'startprice'}).\
+                    merge(endprice.rename(columns = {self.adjprice:'endprice'}),on = 'code',how = 'outer')
+        currret['ret'] = currret['endprice']/currret['startprice'] - 1
+        currret.loc[:,['trddate','nxtrebalance']] = start,end
+        currret = currret[['trddate','nxtrebalance','code','ret']]
+        return currret
 
     def fama_macbeth(self,df_factor:pd.DataFrame,lag:Optional[int] = None)->FamaMacBeth:
         '''
