@@ -916,17 +916,19 @@ class MyFactor:
         '''
         self.g = g
         self.factornamelst = list(df_factor.columns[2:])
+        # 先单独匹配一次下一个交易日的收益率,用于计算ICIR和因子相关性
+        df_factor_icir = self.matchsinglesort(df_factor,None,None,ascending)
         # 引入交易日和资产交易数据,将因子表和交易数据,再平衡日期,分组权重相互匹配
         df_factor = self.matchsinglesort(df_factor,rebalance,weight,ascending)
         # ICIR
-        df_ic = df_factor.groupby('trddate',group_keys = False)[['trddate','code','ret'] + self.factornamelst].apply(self.getic_t,include_groups = False)
-        df_avgic = df_ic.groupby('factorname',group_keys = False)[[f'{self.assettype}num','ic','rankic']].apply(lambda x: x.mean()).reset_index()
-        df_avgic.columns = ['factorname',f'avg{self.assettype}num','avgic','avgrankic']
-        df_icir = df_ic.groupby('factorname',group_keys = False)[['ic','rankic']].apply(lambda x: x.mean()/x.std()).reset_index()
+        df_ic = df_factor_icir.groupby('trddate',group_keys = False)[['trddate','code','ret'] + self.factornamelst].apply(self.getic_t,include_groups = False)
+        df_avgic = df_ic.groupby('factorname',group_keys = False)[[f'{self.assettype}num','ic(%)','rankic(%)']].apply(lambda x: x.mean()).reset_index()
+        df_avgic.columns = ['factorname',f'avg{self.assettype}num','avgic(%)','avgrankic(%)']
+        df_icir = df_ic.groupby('factorname',group_keys = False)[['ic(%)','rankic(%)']].apply(lambda x: x.mean()/x.std()).reset_index()
         df_icir.columns = ['factorname','ir','rankir']
         df_icir = df_avgic.merge(df_icir,on = 'factorname',how = 'left')
         # 因子相关系数矩阵
-        factorcorr = df_factor.groupby('trddate',group_keys = False)[['trddate'] + self.factornamelst].apply(self.getcorr_t,include_groups = False)
+        factorcorr = df_factor_icir.groupby('trddate',group_keys = False)[['trddate'] + self.factornamelst].apply(self.getcorr_t,include_groups = False)
         factorcorr = factorcorr.groupby('factorname',group_keys = False)[self.factornamelst].mean().reset_index()
         # 分组并计算收益率
         singlesort_id_dict,singlesort_ret_dict,singlesort_netval_dict = dict(),dict(),dict()
@@ -1059,16 +1061,16 @@ class MyFactor:
                 第2列为code:str,资产代码
                 第3列为ret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的累计收益率
                 第4~4+len(self.factornamelst)列为正向的因子值:float
-        
+
         输出:
             df_ic_t:多个因子的单期ic表,共5列
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
                 第2列为factorname:str,因子名
                 第3列为当期完整的股票和因子数据条数:int
-                第4列为ic:float,当期的因子ic
-                第5列为rankic:float,当期因子rankic
+                第4列为ic(%):float,当期的因子ic
+                第5列为rankic(%):float,当期因子rankic
         '''
-        df_ic_t = pd.DataFrame(np.full([len(self.factornamelst),5],None),columns = ['trddate','factorname',f'{self.assettype}num','ic','rankic'])
+        df_ic_t = pd.DataFrame(np.full([len(self.factornamelst),5],None),columns = ['trddate','factorname',f'{self.assettype}num','ic(%)','rankic(%)'])
         df_ic_t.loc[:,'trddate'] = df_factor_t['trddate'].values[0]
         df_ic_t.loc[:,'factorname'] = self.factornamelst
         df_ic_t.loc[:,f'{self.assettype}num'] = 0
@@ -1077,8 +1079,8 @@ class MyFactor:
             curr_factor_ret = df_factor_t.loc[:,['ret',factorname]].dropna()
             if len(curr_factor_ret) != 0:
                 df_ic_t.iloc[i,2] = len(curr_factor_ret)
-                df_ic_t.iloc[i,3] = curr_factor_ret.corr().iloc[1,0]
-                df_ic_t.iloc[i,4] = curr_factor_ret.corr('spearman').iloc[1,0]
+                df_ic_t.iloc[i,3] = curr_factor_ret.corr().iloc[1,0]*100
+                df_ic_t.iloc[i,4] = curr_factor_ret.corr('spearman').iloc[1,0]*100
         return df_ic_t
 
     def singlesort_id_t(self,df_factor_t:pd.DataFrame)->pd.DataFrame:
@@ -1199,7 +1201,7 @@ class MyFactor:
         # 根据再平衡日期表的情况为因子表匹配不同的再平衡交易日
         if rebalance is None:# 参数中无再平衡日期时,因子表每个交易日的下一个交易日再平衡
             # 再平衡前1个交易日计算权重,这里因为再平衡交易日正好是因子交易日的后一个交易日,所以直接用因子交易日匹配即可
-            df_factor = df_factor.merge(df_weight,on = ['trddate','code'],how = 'left')
+            df_factor = df_factor.merge(df_weight,on = ['trddate','code'],how = 'inner')
             # 每个交易日的下一个交易日,用于匹配再平衡日期
             trddatematch = pd.DataFrame(self.trdcalendar,dtype = str,columns = ['trddate'])
             trddatematch['nxttrddate'] = trddatematch['trddate'].shift(-1)
@@ -1228,11 +1230,10 @@ class MyFactor:
             df_factor = df_factor.merge(factordate,on = 'trddate',how = 'left')
             df_factor = df_factor.dropna(subset = 'nxtfactor')
             # 为每一行数据匹配再平衡交易日
-            tqdm.pandas(desc = 'match rebalance date')
             df_factor = df_factor.groupby(['trddate','code'],group_keys = False)[df_factor.columns].\
-                            progress_apply(lambda x: self.matchrebalence(x,rebalancematch),include_groups = False)
+                            apply(lambda x: self.matchrebalence(x,rebalancematch),include_groups = False)
             # 匹配权重表,再平衡前1天计算权重
-            df_factor = df_factor.merge(df_weight.rename(columns = {'trddate':'weightdate'}),on = ['weightdate','code'],how = 'left')
+            df_factor = df_factor.merge(df_weight.rename(columns = {'trddate':'weightdate'}),on = ['weightdate','code'],how = 'inner')
         # 根据trddate和nxtrebalance为因子表匹配下一期收益率
         df_factor = self.matchret(df_factor)
         # 删掉计算时的冗余列
@@ -1266,14 +1267,14 @@ class SingleSort:
             第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
             第2列为factorname:str,因子名
             第3列为当期完整的股票和因子数据条数:int
-            第4列为ic:float,因子当期ic
-            第5列为rankic:float,因子当期rankic
+            第4列为ic(%):float,因子当期ic
+            第5列为rankic(%):float,因子当期rankic
 
         df_icir:因子ICIR,共5列
             第1列为factorname:str,因子名
             第2列为时序平均股票和因子数据条数:int
-            第3列为avgic:float,因子时序平均ic
-            第4列为avgrankic:float,因子时序平均rankic
+            第3列为avgic(%):float,因子时序平均ic
+            第4列为avgrankic(%):float,因子时序平均rankic
             第5列为ir:float,因子在整个回测期内的ir
             第6列为rankir:float,因子在整个回测期内的rankir
 
