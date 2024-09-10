@@ -809,14 +809,17 @@ class MyFactor:
         
         参数:
 
-            df:包含code,trddate,nxtrebalance这3列,其中
-                code:str,资产代码
-                trddate:str,格式为'%Y%m%d',当期交易日
-                nxtrebalancestr,格式为'%Y%m%d',下一次再平衡日期
+        df:包含code,trddate,nxtrebalance这3列,其中
+
+            code:str,资产代码
+
+            trddate:str,格式为'%Y%m%d',当期交易日
+
+            nxtrebalancestr,格式为'%Y%m%d',下一次再平衡日期
         
         输出:
 
-            df:原列均不变,仅仅根据df的trddate,nxtrebalance,code计算了每个资产的下一期收益率,新增1列ret
+        df:原列均不变,仅仅根据df的trddate,nxtrebalance,code计算了每个资产的下一期收益率,新增1列ret
         '''
         # 取出收盘价,去掉日期不是再平衡交易日的数据
         df_window = df[['trddate','nxtrebalance']].drop_duplicates().reset_index(drop = True)
@@ -835,17 +838,17 @@ class MyFactor:
         (聚合函数,用于apply)根据当前再平衡日期,下一次再平衡日期匹配窗口期内股票的累计收益率
         
         参数:
-            df_window_t:t时期的日期和下一次再平衡日期,共1行2列
-                第1列为trddate:str,格式为'%Y%m%d'
-                第2列为nxtrebalance:str,下一次再平衡日期,格式为'%Y%m%d'
+        df_window_t:t时期的日期和下一次再平衡日期,共1行2列
+            第1列为trddate:str,格式为'%Y%m%d'
+            第2列为nxtrebalance:str,下一次再平衡日期,格式为'%Y%m%d'
 
-            df_price:对应资产的收盘价数据,至少包含3列
-                第1列为trddate:str,格式为'%Y%m%d'
-                第2列为code:str,资产代码
-                其中包含列self.adjprice:资产复权收盘价
+        df_price:对应资产的收盘价数据,至少包含3列
+            第1列为trddate:str,格式为'%Y%m%d'
+            第2列为code:str,资产代码
+            其中包含列self.adjprice:资产复权收盘价
 
         输出:
-            currret:df_price中包含的资产在trddate和nxtrebalance之间的收益率
+        currret:df_price中包含的资产在trddate和nxtrebalance之间的收益率
         '''
         start,end = df_window_t['trddate'].values[0],df_window_t['nxtrebalance'].values[0]
         startprice = df_price.loc[df_price['trddate'] == start,['code',self.adjprice]]
@@ -863,17 +866,17 @@ class MyFactor:
         
         参数:
 
-            df_factor:符合MyFactor.stdformat输出要求的因子表
+        df_factor:符合MyFactor.stdformat输出要求的因子表
 
-                第1列为trddate
-            
-                第2列为code
+            第1列为trddate
         
-                第3~end列为fama-macbeth回归的解释变量
+            第2列为code
+    
+            第3~end列为fama-macbeth回归的解释变量
         
         输出:
 
-            famamacbeth:linearmodels.FamaMecbeth对象
+        famamacbeth:linearmodels.FamaMecbeth对象
         '''
         if self.df_trd is None:
             raise ValueError('Base trade data not loaded, unable to execute fama-macbeth.')
@@ -1185,26 +1188,43 @@ class MyFactor:
         为因子表匹配再平衡交易日,分组权重,收益率,为单分组和计算ICIR做准备
 
         参数:
+
         df_factor:符合MyFactor.stdformat输出要求的因子表
+
         rebalance:None or list,资产组合再平衡时间,默认为None
+
             None:将df_factor中每个trddate的下一个交易日作为再平衡日期
+
             list:直接设定再平衡日期,当其中出现非交易日时使用当日最近的下一个交易日再平衡,values为str类型的日期,格式为'%Y%m%d'
+
         weight:None or DataFrame,默认为None
+
             None:计算等权重分组收益率和流通市值(基金时使用总规模)加权分组收益率
+
             DataFrame:格式同MyFactor.stdformat输出要求,'trddate'和'code'之外的各列是资产加权的权重,trddate需要包含每次再平衡前一个交易日
                     此时计算等权重,流通市值加权和weight中的权重加权分组收益率
+
         ascending:None or list,默认为None
+
             None:全部因子都是正向预期因子(因子值越大,收益率越高)
+
             list:各因子是否是正向预期因子,与df_factor的因子顺序一致
 
         输出:
+
         df_factor:符合MyFactor.stdformat输出要求的因子表,非正向因子全部转为正向因子,共2(trddate,code) + 2(组内等权重,组内市值加权) + weight数量 + factor数量 + 1(ret)列
             第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
+            
             第2列为code:str,资产代码
+            
             第3列为ret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的累计收益率
+            
             第4列为single:int,全部为1,组内等权重加权的权重
+            
             第5列为size:float,资产市值,组内市值加权的权重
+            
             [weight不为None时]第6~np.size(weight,1)+6列为weight.columns:float,组内自定义方式加权的权重
+            
             第np.size(weight,1)+7~np.size(df_factor.loc[:,2:])+np.size(weight,1)+7列为df_factor.columns[2:]:float,转为正向的因子值
         '''
         if self.df_trd is None:
@@ -1283,75 +1303,125 @@ class SingleSort:
         SingleSort类专用于存储和获取单分组结果,画图
 
         df_ic:因子IC,共5列
+            
             第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
+            
             第2列为factorname:str,因子名
+            
             第3列为当期完整的股票和因子数据条数:int
+            
             第4列为ic(%):float,因子当期ic
+            
             第5列为rankic(%):float,因子当期rankic
 
         df_icir:因子ICIR,共5列
+            
             第1列为factorname:str,因子名
+            
             第2列为时序平均股票和因子数据条数:int
+            
             第3列为avgic(%):float,因子时序平均ic
+            
             第4列为avgrankic(%):float,因子时序平均rankic
+            
             第5列为ir:float,因子在整个回测期内的ir
+            
             第6列为rankir:float,因子在整个回测期内的rankir
 
         df_ratios:因子分组年化收益率,最大回撤率,收益率的newey-west t值,共9列
+            
             第1列为factorname:str,因子名
+            
             第2列为weight:str,组合加权方式
+
             第3列为id:str,1~g的分组结果以及'singlesort'
+
             第4列为annret:float,不考虑费用的组合年化收益率
+
             第5列为anntrdret:float,考虑费用的组合年化收益率
+
             第6列为retmaxdrawdown:float,不考虑费用的组合最大回撤率
+
             第7列为trdretmaxdrawdown:float,考虑费用的组合最大回撤率
+
             第8列为rettval:float,不考虑费用的组合收益率t值
+
             第9列为trdrettval:float,考虑费用的组合收益率t值
 
-        factorcorr:因子相关系数表
-            方阵,因子截面相关系数矩阵的均值
+        factorcorr:因子相关系数表,方阵,因子截面相关系数矩阵的均值
 
         dict_id:资产分组表
+
             keys:因子名
+
             values:df_factor,资产分组结果和归一化后的权重表
+
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
+
                 第2列为code:str,资产代码
+
                 第3列为id:str(int),1~g的分组结果以及'singlesort'
+
                 第4~4+len(self.weightlst)列为weightlst:float,各组的组内资产权重
 
         dict_ret:组合收益率表
+
             keys:因子名
+
             values:df_group,分组收益率
+
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
+
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
+
                 第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的分组收益率
 
         dict_netval:考虑交易费用的组合净值表
+
             keys:因子名
+
             values:df_netval,考虑交易费用的组合净值表
+
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
+                
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
+
                 第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的组合净值
 
         dict_fee:组合交易费用表
+
             keys:因子名
+
             values:df_fee,交易费用表
+
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
+
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
+
                 第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的交易费用
 
         dict_trdret:考虑交易费用的组合收益率表
+
             keys:因子名
+
             values:df_trdret,考虑交易费用的组合收益率表
+
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
+
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
+
                 第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的交易费用下的组合收益率
         
         dict_trdnetval:考虑交易费用的组合净值表
+
             keys:因子名
+
             values:df_trdnetval,考虑交易费用的组合净值表
+
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
+
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
+
                 第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的交易费用下的组合净值
         '''
         self.factornamelst = list(dict_id.keys())
@@ -1417,9 +1487,9 @@ class SingleSort:
         
         参数:
     
-            path:包含图片名的path
+        path:包含图片名的path
 
-            considerfee:False时输出不考虑交易费用的累计净值,True时输出考虑交易费用的累计净值
+        considerfee:False时输出不考虑交易费用的累计净值,True时输出考虑交易费用的累计净值
         '''
         factornum,weightnum = len(self.factornamelst),len(self.weightlst)
         fig,axs = plt.subplots(weightnum,factornum,figsize = [factornum*10,weightnum*5])
