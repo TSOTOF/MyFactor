@@ -105,7 +105,8 @@ class MyFactor:
             df_rawdate['rawdate'] = df_rawdate['rawdate'].apply(lambda x: dt.datetime.strftime(x,'%Y%m%d'))
         else:
             df_rawdate['rawdate'] = df_rawdate['rawdate'].apply(lambda x: str(x))
-        df_rawdate['trddate'] = df_rawdate['rawdate'].apply(lambda x: trdcalendar[(trdcalendar < x).sum()])
+        tqdm.pandas(desc = 'matching trddate')
+        df_rawdate['trddate'] = df_rawdate['rawdate'].progress_apply(lambda x: trdcalendar[(trdcalendar < x).sum()])
         return list(df_rawdate['trddate'])
 
     @staticmethod
