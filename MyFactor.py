@@ -84,6 +84,59 @@ class MyFactor:
         return year + month + date
 
     @staticmethod
+    def trddatematch(rawdatelst:Union[list,np.array,pd.Series],trdcalendar:np.array)->list:
+        '''
+        把原始日期转为下一个最近的交易日(含当日)
+
+        参数:
+
+            rawdatelst:原始日期列表,values为dt.datetime.date或'%Y%m%d','%Y-%m-%d'格式的日期
+
+            trdcalendar:交易日历,trdcalendar的维数为1,values为str,格式为'%Y%m%d'
+
+        输出:
+
+            trddatelst:输出的与原始交易日对应的交易日,values格式与输入格式保持一致
+        '''
+        df_rawdate = pd.DataFrame(list(rawdatelst),columns = ['rawdate'])
+        if (type(rawdatelst[0]) == str) and ('-' in rawdatelst[0]):
+            df_rawdate['rawdate'] = df_rawdate['rawdate'].apply(lambda x: ''.join(x.split('-')))
+        elif type(rawdatelst[0]) == dt.datetime.date:
+            df_rawdate['rawdate'] = df_rawdate['rawdate'].apply(lambda x: dt.datetime.strftime(x,'%Y%m%d'))
+        else:
+            df_rawdate['rawdate'] = df_rawdate['rawdate'].apply(lambda x: str(x))
+        df_rawdate['trddate'] = df_rawdate['rawdate'].apply(lambda x: trdcalendar[(trdcalendar < x).sum()])
+        return list(df_rawdate['trddate'])
+
+    @staticmethod
+    def endmonthmatch(rawdatelst:Union[list,np.array,pd.Series],trdcalendar:np.array)->list:
+        '''
+        把原始日期转为月末交易日
+
+        参数:
+
+            rawdatelst:原始日期列表,values为dt.datetime.date或'%Y%m%d','%Y-%m-%d'格式的日期
+
+            trdcalendar:交易日历,trdcalendar的维数为1,values为str,格式为'%Y%m%d'
+
+        输出:
+
+            endmonthdatelst:输出的与原始交易日对应的月末交易日,values为str,格式为'%Y%m%d'
+        '''
+        endmonthcalendar = pd.DataFrame(trdcalendar,columns = ['endmonthdate'])
+        endmonthcalendar['yearmonth'] = endmonthcalendar['endmonthdate'].apply(lambda x: x[:6])
+        endmonthcalendar = endmonthcalendar.groupby('yearmonth',group_keys = False).apply(lambda x: x.iloc[-1,:],include_groups = False).reset_index()
+        df_rawdate = pd.DataFrame(list(rawdatelst),columns = ['rawdate'])
+        if (type(rawdatelst[0]) == str) and ('-' in rawdatelst[0]):
+            df_rawdate['yearmonth'] = df_rawdate['rawdate'].apply(lambda x: ''.join(x.split('-')[:2]))
+        elif type(rawdatelst[0]) == dt.datetime.date:
+            df_rawdate['yearmonth'] = df_rawdate['rawdate'].apply(lambda x: dt.datetime.strftime(x,'%Y%m'))
+        else:
+            df_rawdate['yearmonth'] = df_rawdate['rawdate'].apply(lambda x: str(x)[:6])
+        df_rawdate = df_rawdate.merge(endmonthcalendar,on = 'yearmonth',how = 'left')
+        return list(df_rawdate['endmonthdate'])
+
+    @staticmethod
     def newey_west_test(arr:Union[List,np.array,pd.Series],lag = None)->float:
         '''对序列做newey-test t检验,原假设为序列均值为0,备择假设为序列均值非0'''
         df_arr = pd.DataFrame(arr.values,columns = ['x'])
@@ -154,15 +207,8 @@ class MyFactor:
         # 删除因子值全为空值的行
         df_factor = df_factor.dropna(subset = df_factor.columns[2:],how = 'all')
         df_factor = df_factor.reset_index(drop = True)
-        # 日期数据格式转化成'%Y%m%d'
-        if type(df_factor.loc[0,datename]) == dt.datetime.date:
-            df_factor[datename] = df_factor.loc[:,datename].apply(lambda x: dt.datetime.strftime(x,'%Y$m%d'))
-        elif (type(df_factor.loc[0,datename]) == str) and ('-' in df_factor.loc[0,datename]):
-            df_factor[datename] = df_factor.loc[:,datename].apply(MyFactor.stdstrdate)
-        else:
-            df_factor[datename] = df_factor.loc[:,datename].apply(lambda x: str(x))
-        ## 将原始日期转化为原始日期之后最近的交易日(当原始日期为交易日时直接用即可)
-        df_factor[datename] = df_factor[datename].apply(lambda x: trdcalendar[(trdcalendar < x).sum()])
+        # 日期数据格式转化成'%Y%m%d',将原始日期转化为原始日期之后最近的交易日(含当日)
+        df_factor[datename] = MyFactor.trddatematch(df_factor[datename],trdcalendar)
         ## 重新设置前两列列名(trddate,code)
         df_factor = df_factor.rename(columns = {datename:'trddate',codename:'code'})
         ## 根据trddate,code排序
@@ -546,33 +592,6 @@ class MyFactor:
         cursor.close()
         conn.close()
         return trdcalendar
-
-    def endmonthmatch(self,trddatelst:Union[list,np.array,pd.Series])->list:
-        '''
-        把原始交易日转为月末交易日
-        
-        参数:
-
-            trddatelst:原始交易日列表,values为dt.datetime.date或'%Y%m%d'格式的日期
-
-        输出:
-
-            endmonthdatelst:输出的与原始交易日对应的月末交易日,values格式与输入格式保持一致
-        '''
-        endmonthcalendar = pd.DataFrame(self.gettrdcalendar('sz'),columns = ['endmonthdate'])
-        endmonthcalendar['yearmonth'] = endmonthcalendar['endmonthdate'].apply(lambda x: x[:6])
-        endmonthcalendar = endmonthcalendar.groupby('yearmonth',group_keys = False).apply(lambda x: x.iloc[-1,:],include_groups = False).reset_index()
-        df_trddate = pd.DataFrame(list(trddatelst),columns = ['trddate'])
-        match isinstance(trddatelst[0],str):
-            case True:
-                df_trddate['yearmonth'] = df_trddate['trddate'].apply(lambda x: x[:6])
-                df_trddate = df_trddate.merge(endmonthcalendar,on = 'yearmonth',how = 'left')
-                return list(df_trddate['endmonthdate'])
-            case False:
-                df_trddate['yearmonth'] = df_trddate['trddate'].apply(lambda x: dt.datetime.strftime(x,'%Y%m'))
-                df_trddate = df_trddate.merge(endmonthcalendar,on = 'yearmonth',how = 'left')
-                df_trddate['endmonthdate'] = df_trddate['endmonthdate'].apply(lambda x: dt.datetime.strptime(x,'%Y%m%d').date())
-                return list(df_trddate['endmonthdate'])
 
     def getfactortables(self)->Dict[str,List[str]]:
         '''获取全量因子表及因子名称'''
