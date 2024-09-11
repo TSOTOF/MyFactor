@@ -399,8 +399,9 @@ class MyFactor:
             factornamelst = df_factor.columns[2:]
         else:
             factornamelst = list(factorname)
-        df_factor[factornamelst] = df_factor.groupby('trddate',group_keys = False)[['trddate','code'] + factornamelst]\
-                                            .apply(lambda x: MyFactor.standardize_t(x,factornamelst,stdtype),include_groups =False)
+        stdfactor = df_factor.groupby('trddate',group_keys = False)[['trddate','code'] + factornamelst]\
+                            .apply(lambda x: MyFactor.standardize_t(x,factornamelst,stdtype),include_groups =False)
+        df_factor = df_factor.drop(factornamelst,axis = 1).merge(stdfactor,on = ['trddate','code'],how = 'left')
         return df_factor
 
     @staticmethod
@@ -418,7 +419,7 @@ class MyFactor:
 
         输出:
 
-        df_factor_t:某日期标准化后的股票或因子值,shape = [N,]
+        df_factor_t:某日期标准化后的股票或因子值(trddate相同)
         '''
         if stdtype == 'standardize':
             meanval = np.nanmean(df_factor_t[factornamelst])
@@ -884,7 +885,7 @@ class MyFactor:
         # 因子列表
         factorlst = list(df_factor.columns[2:])
         # 找出每行的下一次再平衡交易日(这里直接用股票对应因子下一期日期即可)
-        df_factor.loc[:,'nxtrebalance'] = df_factor.groupby('code',group_keys = False)['trddate'].apply(lambda x: x.shift(-1))
+        df_factor['nxtrebalance'] = df_factor.groupby('code')['trddate'].shift(-1)
         df_factor = df_factor.dropna(subset = 'nxtrebalance').reset_index(drop = True)
         # 根据trddate和nxtrebalence获取下一期收益率
         df_factor = self.matchret(df_factor)
