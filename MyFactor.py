@@ -1505,7 +1505,7 @@ class SingleSort:
                 weightname = weightlst[j]
                 df_netval_ = df_netval.loc[:,['trddate','id',weightname]]
                 idlst = list(df_netval_['id'].drop_duplicates().sort_values().values)
-                ax = axs[j,i]
+                ax = axs[j,i] if i > 1 else axs[j]
                 for id in idlst:
                     df_netval_id = df_netval_.loc[df_netval_['id'] == id,['trddate',weightname]]
                     boolloc = (self.df_ratios['factorname'] == factorname)*(self.df_ratios['weight'] == baseweightname)*(self.df_ratios['id'] == id)
