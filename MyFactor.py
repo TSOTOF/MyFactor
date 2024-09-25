@@ -128,14 +128,46 @@ class MyFactor:
         endmonthcalendar['yearmonth'] = endmonthcalendar['endmonthdate'].apply(lambda x: x[:6])
         endmonthcalendar = endmonthcalendar.groupby('yearmonth',group_keys = False).apply(lambda x: x.iloc[-1,:],include_groups = False).reset_index()
         df_rawdate = pd.DataFrame(list(rawdatelst),columns = ['rawdate'])
-        if (type(rawdatelst[0]) == str) and ('-' in rawdatelst[0]):
+        if isinstance(rawdatelst[0],str) and '-' in rawdatelst[0]:
             df_rawdate['yearmonth'] = df_rawdate['rawdate'].apply(lambda x: ''.join(x.split('-')[:2]))
-        elif type(rawdatelst[0]) == dt.datetime.date:
+        elif isinstance(rawdatelst[0],str):
+            df_rawdate['yearmonth'] = df_rawdate['rawdate'].apply(lambda x: str(x)[:6])
+        elif isinstance(rawdatelst[0], dt.date):
             df_rawdate['yearmonth'] = df_rawdate['rawdate'].apply(lambda x: dt.datetime.strftime(x,'%Y%m'))
         else:
-            df_rawdate['yearmonth'] = df_rawdate['rawdate'].apply(lambda x: str(x)[:6])
+            raise ValueError("Unsupported date format in datelst")
         df_rawdate = df_rawdate.merge(endmonthcalendar,on = 'yearmonth',how = 'left')
         return list(df_rawdate['endmonthdate'])
+
+    @staticmethod
+    def endweekmatch(rawdatelst:Union[list,np.array,pd.Series],trdcalendar:np.array)->list:
+        '''
+        把原始日期转为周末交易日
+
+        参数:
+
+            rawdatelst:原始日期列表,values为dt.datetime.date或'%Y%m%d','%Y-%m-%d'格式的日期
+
+            trdcalendar:交易日历,trdcalendar的维数为1,values为str,格式为'%Y%m%d'
+
+        输出:
+
+            endweekdatelst:输出的与原始交易日对应的周末交易日,values为str,格式为'%Y%m%d'
+        '''
+        endweekcalendar = pd.DataFrame(trdcalendar,columns = ['endweekdate'])
+        endweekcalendar['yearweek'] = endweekcalendar['endweekdate'].apply(lambda x: dt.datetime.strftime(dt.datetime.strptime(x,'%Y%m%d'),'%Y%W'))
+        endweekcalendar = endweekcalendar.groupby('yearweek',group_keys = False).apply(lambda x: x.iloc[-1,:],include_groups = False).reset_index()
+        df_rawdate = pd.DataFrame(list(rawdatelst),columns = ['rawdate'])
+        if isinstance(rawdatelst[0],str) and '-' in rawdatelst[0]:
+            df_rawdate['yearweek'] = df_rawdate['rawdate'].apply(lambda x: dt.datetime.strftime(dt.datetime.strptime(x,'%Y-%m-%d'),'%Y%W'))
+        elif isinstance(rawdatelst[0],str):
+            df_rawdate['yearweek'] = df_rawdate['rawdate'].apply(lambda x: dt.datetime.strftime(dt.datetime.strptime(x,'%Y%m%d'),'%Y%W'))
+        elif isinstance(rawdatelst[0], dt.date):
+            df_rawdate['yearweek'] = df_rawdate['rawdate'].apply(lambda x: dt.datetime.strftime(x,'%Y%W'))
+        else:
+            raise ValueError("Unsupported date format in datelst")
+        df_rawdate = df_rawdate.merge(endweekcalendar,on = 'yearweek',how = 'left')
+        return list(df_rawdate['endweekdate'])
 
     @staticmethod
     def newey_west_test(arr:Union[List,np.array,pd.Series],lag = None)->float:
