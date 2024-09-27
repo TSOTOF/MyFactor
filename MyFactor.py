@@ -19,7 +19,7 @@ from sqlalchemy.types import VARCHAR,DECIMAL
 
 
 class MyFactor:
-    def __init__(self,host:str,user:str,password:str,exchange:str,loadtrd:str = None,start:str = None,end:str = None):
+    def __init__(self,host:str,user:str,password:str,exchange:str,loadtrd:str = None,stkprice:str = None,start:str = None,end:str = None):
         '''
         连接因子数据库,获取因子表列表,交易日历
 
@@ -31,6 +31,8 @@ class MyFactor:
 
         loadtrd:读取的交易数据类型,例如{'stk','fund'}(时间较久),一般做回测时需要读取,简单存取因子值无需读取,loadtrd为None时不读取
 
+        stkprice:用于股票因子回测的价格类型,loadtrd为'stk'时对应的值为{'adjclose'(默认),'adjopen','adjavgprice'},loadtrd为'fund'时对应的值恒为'adjnav'
+
         start:读取交易数据的开始日期,'%Y%m%d'格式的日期,start为None时从头开始读
 
         end:读取交易数据的结束日期,'%Y%m%d'格式的日期,end为None时读取到最后一个日期
@@ -40,11 +42,16 @@ class MyFactor:
         self.host,self.user,self.password,self.assettype = host,user,password,loadtrd
         self.factortabledict = self.getfactortables()
         self.trdcalendar = self.gettrdcalendar(exchange)
-        if loadtrd is not None:
-            self.adjprice = {'stk':'adjclose','fund':'adjnav'}[loadtrd]
-            self.df_trd = self.getassettrd(loadtrd,[self.adjprice,'size'],start,end)
+        if loadtrd == 'stk':
+            self.price = 'adjclose' if stkprice is None else stkprice
+            self.df_trd = self.getassettrd(loadtrd,[self.price,'size'],start,end)
+        elif loadtrd == 'fund':
+            self.price = 'adjnav'
+            self.df_trd = self.getassettrd(loadtrd,[self.price,'size'],start,end)
+        elif loadtrd is None:
+            self.price,self.df_trd = None,None
         else:
-            self.adjprice,self.df_trd = None,None
+            raise ValueError('Unsupported loadtrd value')
 
     @staticmethod
     def cumret(ret:Union[list,np.array,pd.Series])->float:
@@ -858,7 +865,7 @@ class MyFactor:
         # 取出收盘价,去掉日期不是再平衡交易日的数据
         df_window = df[['trddate','nxtrebalance']].drop_duplicates().reset_index(drop = True)
         rebalancelst = list(set(df_window['trddate'])|set(df_window['nxtrebalance']))
-        df_price = self.df_trd.loc[self.df_trd['trddate'].isin(rebalancelst),['trddate','code',self.adjprice]].dropna()
+        df_price = self.df_trd.loc[self.df_trd['trddate'].isin(rebalancelst),['trddate','code',self.price]].dropna()
         # 找到再平衡交易日后,用再平衡交易日匹配收益率,此时df_factor每一行都是再平衡之前的因子值和再平衡之后时期的收益率
         tqdm.pandas(desc = 'match rebalance ret')
         df_window = df_window.groupby(['trddate','nxtrebalance'],group_keys = False)[['trddate','nxtrebalance']].\
@@ -879,16 +886,16 @@ class MyFactor:
         df_price:对应资产的收盘价数据,至少包含3列
             第1列为trddate:str,格式为'%Y%m%d'
             第2列为code:str,资产代码
-            其中包含列self.adjprice:资产复权收盘价
+            其中包含列self.price:资产价格
 
         输出:
         currret:df_price中包含的资产在trddate和nxtrebalance之间的收益率
         '''
         start,end = df_window_t['trddate'].values[0],df_window_t['nxtrebalance'].values[0]
-        startprice = df_price.loc[df_price['trddate'] == start,['code',self.adjprice]]
-        endprice = df_price.loc[df_price['trddate'] == end,['code',self.adjprice]]
-        currret = startprice.rename(columns = {self.adjprice:'startprice'}).\
-                    merge(endprice.rename(columns = {self.adjprice:'endprice'}),on = 'code',how = 'outer')
+        startprice = df_price.loc[df_price['trddate'] == start,['code',self.price]]
+        endprice = df_price.loc[df_price['trddate'] == end,['code',self.price]]
+        currret = startprice.rename(columns = {self.price:'startprice'}).\
+                    merge(endprice.rename(columns = {self.price:'endprice'}),on = 'code',how = 'outer')
         currret['ret'] = currret['endprice']/currret['startprice'] - 1
         currret.loc[:,['trddate','nxtrebalance']] = start,end
         currret = currret[['trddate','nxtrebalance','code','ret']]
