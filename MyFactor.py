@@ -1573,8 +1573,6 @@ class SingleSort:
             # 相关系数
             self.factorcorr.to_excel(writer,sheet_name = 'corr',index = False)
             for factorname in self.factornamelst:
-                # 分组结果
-                self.dict_id[factorname].to_excel(writer,sheet_name = f'{factorname}分组结果',index = False)
                 # 分组收益率
                 self.dict_ret[factorname].to_excel(writer,sheet_name = f'{factorname}收益率',index = False)
                 # 考虑交易费用的分组收益率
