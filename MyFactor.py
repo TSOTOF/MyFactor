@@ -31,7 +31,7 @@ class MyFactor:
 
         loadtrd:读取的交易数据类型,例如{'stk','fund'}(时间较久),一般做回测时需要读取,简单存取因子值无需读取,loadtrd为None时不读取
 
-        stkprice:用于股票因子回测的价格类型,loadtrd为'stk'时对应的值为{'adjclose'(默认),'adjopen','adjavgprice'},loadtrd为'fund'时对应的值恒为'adjnav'
+        stkprice:用于股票因子回测的价格类型,loadtrd为'stk'时对应的值为{'adjclose'(默认),'adjopen','adjvwap'},loadtrd为'fund'时对应的值恒为'adjnav'
 
         start:读取交易数据的开始日期,'%Y%m%d'格式的日期,start为None时从头开始读
 
