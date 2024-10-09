@@ -871,7 +871,6 @@ class MyFactor:
         rebalancelst = list(set(df_window['trddate'])|set(df_window['nxtrebalance']))
         df_price = self.df_trd.loc[self.df_trd['trddate'].isin(rebalancelst),['trddate','code',self.price]].dropna()
         # 找到再平衡交易日后,用再平衡交易日匹配收益率,此时df_factor每一行都是再平衡之前的因子值和再平衡之后时期的收益率
-        tqdm.pandas(desc = 'match rebalance ret')
         df_window = df_window.groupby(['trddate','nxtrebalance'],group_keys = False)[['trddate','nxtrebalance']].\
                         apply(lambda x: self.matchret_t(x,df_price),include_groups = False).dropna().reset_index(drop = True)
         df_window.columns = ['trddate','nxtrebalance','code','ret','excessret']
@@ -989,10 +988,13 @@ class MyFactor:
         '''
         self.g = g
         self.factornamelst = list(df_factor.columns[2:])
+        print(f'matching {self.assettype} rebalance and ret...')
+        timestart = time()
         # 先单独匹配一次下一个交易日的收益率,用于计算ICIR和因子相关性
         df_factor_icir = self.matchsinglesort(df_factor,None,None,ascending)
         # 引入交易日和资产交易数据,将因子表和交易数据,再平衡日期,分组权重相互匹配
         df_factor = self.matchsinglesort(df_factor,rebalance,weight,ascending)
+        print(f'{self.assettype} rebalance and ret matched,{time() - timestart:.2f} passed.')
         # ICIR
         df_ic = df_factor_icir.groupby('trddate',group_keys = False)[['trddate','code','ret','excessret'] + self.factornamelst].apply(self.getic_t,include_groups = False)
         df_avgic = df_ic.groupby('factorname',group_keys = False)[[f'{self.assettype}num','ic(%)','rankic(%)','excess ic(%)','excess rankic(%)']].apply(lambda x: x.mean()).reset_index()
@@ -1004,6 +1006,7 @@ class MyFactor:
         df_corr = df_factor_icir.groupby('trddate',group_keys = False)[['trddate'] + self.factornamelst].apply(self.getcorr_t,include_groups = False)
         df_corr = df_corr.groupby('factorname',group_keys = False)[self.factornamelst].mean().reset_index()
         # 分组并计算收益率
+        timestart = time()
         singlesort_id_dict,singlesort_ret_dict,singlesort_netval_dict = dict(),dict(),dict()
         singlesort_fee_dict,singlesort_trdret_dict,singlesort_trdnetval_dict = dict(),dict(),dict()
         lastweightlst = [f'last{weight}' for weight in self.weightlst]
@@ -1015,6 +1018,7 @@ class MyFactor:
         df_ratios = pd.DataFrame(columns = ['factorname','weight','id','annret','annexcessret','anntrdret','annexcesstrdret',\
                     'retmaxdrawdown','excessretmaxdrawdown','trdretmaxdrawdown','excesstrdretmaxdrawdown','rettval','excessrettval','trdrettval','excesstrdrettval'])
         for factorname in self.factornamelst:
+            print(f'getting factor {factorname} singlesort results...')
             # 取出仅包含单个因子的因子表
             df_factor_ = df_factor[['trddate','code','ret','excessret'] + self.weightlst + [factorname]].dropna().reset_index(drop = True)
             # 计算分组结果
@@ -1089,6 +1093,7 @@ class MyFactor:
                     # 存储结果
                     df_ratios.loc[len(df_ratios)] = [factorname,weight,id,ann_ret,ann_excessret,ann_trdret,ann_excesstrdret,\
                                                      maxdrawdown_ret,maxdrawdown_excessret,maxdrawdown_trdret,maxdrawdown_excesstrdret,tval_ret,tval_excessret,tval_trdret,tval_excesstrdret]
+            print(f'factor {factorname} singlesort results got,{time() - timestart:.2f} passed.')
         return SingleSort(df_ic,df_icir,df_corr,df_ratios,singlesort_id_dict,singlesort_ret_dict,singlesort_netval_dict,singlesort_fee_dict,singlesort_trdret_dict,singlesort_trdnetval_dict)
 
     def getnetval_id(self,df_ret_id)->pd.DataFrame:
@@ -1344,17 +1349,14 @@ class MyFactor:
             # 匹配每一个再平衡交易日的下一个最近的再平衡交易日,用于计算两期之间的累计收益率
             rebalancematch['nxtrebalance'] = rebalancematch['trddate'].shift(-1)
             rebalancematch = rebalancematch.dropna()
-            # 用每个因子的交易日和下一个交易日,限定匹配再平衡交易日的范围.某一期股票因子数据缺失时,
-            # 这样做而不是在股票上group再shift可以确保缺失之前的因子数据不会被错误地用于当前分组
-            factordate = df_factor[['trddate']].drop_duplicates().sort_values(by = 'trddate')
-            factordate['nxtfactor'] = factordate.shift(-1)
-            df_factor = df_factor.merge(factordate,on = 'trddate',how = 'left')
-            df_factor = df_factor.dropna(subset = 'nxtfactor')
-            # 为每一行数据匹配再平衡交易日
-            df_factor = df_factor.groupby(['trddate','code'],group_keys = False)[df_factor.columns].\
-                            apply(lambda x: self.matchrebalence(x,rebalancematch),include_groups = False)
+            # 用全部因子的交易日限定匹配再平衡交易日的范围.确保缺失之前的因子数据不会被错误地用于当前分组
+            df_factordate = df_factor['trddate'].drop_duplicates().sort_values().reset_index(drop = True)
+            rebalancematch['factordate'] = rebalancematch['trddate'].apply(lambda x: MyFactor.matchrebalence(x,df_factordate))
+            rebalancematch = rebalancematch.dropna()
+            # 为每个因子交易日匹配再平衡交易日
+            df_factor = rebalancematch.merge(df_factor.rename(columns = {'trddate':'factordate'}),on = 'factordate',how = 'left').drop('factordate',axis = 1)
             # 匹配权重表,再平衡前1天计算权重
-            df_factor = df_factor.merge(df_weight.rename(columns = {'trddate':'weightdate'}),on = ['weightdate','code'],how = 'inner')
+            df_factor = df_factor.merge(df_weight.rename(columns = {'trddate':'weightdate'}),on = ['weightdate','code'],how = 'inner').reset_index(drop = True)
         # 根据trddate和nxtrebalance为因子表匹配下一期收益率
         df_factor = self.matchret(df_factor)
         # 删掉计算时的冗余列
@@ -1368,16 +1370,11 @@ class MyFactor:
         # 输出
         return df_factor
 
-    def matchrebalence(self,df_factor_it:pd.DataFrame,rebalancematch:pd.DataFrame)->pd.DataFrame:
-        '''(聚合函数,用于apply)为资产在某个交易日上的数据匹配再平衡日期'''
-        start,end = df_factor_it['trddate'].values[0],df_factor_it['nxtfactor'].values[0]
-        factormatch = rebalancematch.loc[(rebalancematch['trddate'] > start)*(rebalancematch['trddate'] <= end),:]
-        if len(factormatch) != 0:
-            matchvalues = df_factor_it[['code'] + self.factornamelst].values[0]
-            factormatch.loc[:,['code'] + self.factornamelst] = list(matchvalues)
-            return factormatch
-        else:
-            return pd.DataFrame()
+    @staticmethod
+    def matchrebalence(rebalancedate:str,df_factordate:pd.Series)->pd.DataFrame:
+        '''(聚合函数,用于apply)为再平衡日期匹配因子交易日'''
+        factordateloc = (df_factordate < rebalancedate).sum() - 1
+        return df_factordate[factordateloc] if factordateloc >= 0 else None
 
 class SingleSort:
     def __init__(self,df_ic:pd.DataFrame,df_icir:pd.DataFrame,df_corr:pd.DataFrame,df_ratios:pd.DataFrame,dict_id:Dict[str,pd.DataFrame],dict_ret:Dict[str,pd.DataFrame],dict_netval:Dict[str,pd.DataFrame],dict_fee:Dict[str,pd.DataFrame],dict_trdret:Dict[str,pd.DataFrame],dict_trdnetval:Dict[str,pd.DataFrame]):
@@ -1632,8 +1629,6 @@ class SingleSort:
 
     def describe(self,path:str):
         '''输出单分组的全部结果,输出到excel中,path是包含excel名的path'''
-        print('saving singlesort results...')
-        timestart = time()
         with pd.ExcelWriter(path,engine = 'openpyxl') as writer:
             # IC
             self.df_ic.to_excel(writer,sheet_name = 'IC',index = False)
@@ -1648,4 +1643,4 @@ class SingleSort:
                 self.dict_ret[factorname].to_excel(writer,sheet_name = f'{factorname}收益率',index = False)
                 # 考虑交易费用的分组收益率
                 self.dict_trdret[factorname].to_excel(writer,sheet_name = f'{factorname}交易收益率',index = False)
-        print(f'singlesort results saved, {time() - timestart:.2f}s passed.')
+        print(f'singlesort results saved.')
