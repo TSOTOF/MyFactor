@@ -988,13 +988,13 @@ class MyFactor:
         '''
         self.g = g
         self.factornamelst = list(df_factor.columns[2:])
-        print(f'matching {self.assettype} rebalance and ret...')
         timestart = time()
         # 先单独匹配一次下一个交易日的收益率,用于计算ICIR和因子相关性
         df_factor_icir = self.matchsinglesort(df_factor,None,None,ascending)
         # 引入交易日和资产交易数据,将因子表和交易数据,再平衡日期,分组权重相互匹配
         df_factor = self.matchsinglesort(df_factor,rebalance,weight,ascending)
-        print(f'{self.assettype} rebalance and ret matched,{time() - timestart:.2f} passed.')
+        print(f'rebalance and ret matched, {time() - timestart:.2f} passed.')
+        timestart = time()
         # ICIR
         df_ic = df_factor_icir.groupby('trddate',group_keys = False)[['trddate','code','ret','excessret'] + self.factornamelst].apply(self.getic_t,include_groups = False)
         df_avgic = df_ic.groupby('factorname',group_keys = False)[[f'{self.assettype}num','ic(%)','rankic(%)','excess ic(%)','excess rankic(%)']].apply(lambda x: x.mean()).reset_index()
@@ -1006,7 +1006,6 @@ class MyFactor:
         df_corr = df_factor_icir.groupby('trddate',group_keys = False)[['trddate'] + self.factornamelst].apply(self.getcorr_t,include_groups = False)
         df_corr = df_corr.groupby('factorname',group_keys = False)[self.factornamelst].mean().reset_index()
         # 分组并计算收益率
-        timestart = time()
         singlesort_id_dict,singlesort_ret_dict,singlesort_netval_dict = dict(),dict(),dict()
         singlesort_fee_dict,singlesort_trdret_dict,singlesort_trdnetval_dict = dict(),dict(),dict()
         lastweightlst = [f'last{weight}' for weight in self.weightlst]
@@ -1018,7 +1017,6 @@ class MyFactor:
         df_ratios = pd.DataFrame(columns = ['factorname','weight','id','annret','annexcessret','anntrdret','annexcesstrdret',\
                     'retmaxdrawdown','excessretmaxdrawdown','trdretmaxdrawdown','excesstrdretmaxdrawdown','rettval','excessrettval','trdrettval','excesstrdrettval'])
         for factorname in self.factornamelst:
-            print(f'getting factor {factorname} singlesort results...')
             # 取出仅包含单个因子的因子表
             df_factor_ = df_factor[['trddate','code','ret','excessret'] + self.weightlst + [factorname]].dropna().reset_index(drop = True)
             # 计算分组结果
@@ -1093,7 +1091,7 @@ class MyFactor:
                     # 存储结果
                     df_ratios.loc[len(df_ratios)] = [factorname,weight,id,ann_ret,ann_excessret,ann_trdret,ann_excesstrdret,\
                                                      maxdrawdown_ret,maxdrawdown_excessret,maxdrawdown_trdret,maxdrawdown_excesstrdret,tval_ret,tval_excessret,tval_trdret,tval_excesstrdret]
-            print(f'factor {factorname} singlesort results got,{time() - timestart:.2f} passed.')
+        print(f'singlesort results got, {time() - timestart:.2f} passed.')
         return SingleSort(df_ic,df_icir,df_corr,df_ratios,singlesort_id_dict,singlesort_ret_dict,singlesort_netval_dict,singlesort_fee_dict,singlesort_trdret_dict,singlesort_trdnetval_dict)
 
     def getnetval_id(self,df_ret_id)->pd.DataFrame:
@@ -1643,4 +1641,3 @@ class SingleSort:
                 self.dict_ret[factorname].to_excel(writer,sheet_name = f'{factorname}收益率',index = False)
                 # 考虑交易费用的分组收益率
                 self.dict_trdret[factorname].to_excel(writer,sheet_name = f'{factorname}交易收益率',index = False)
-        print(f'singlesort results saved.')
