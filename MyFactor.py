@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import pymysql
-import openpyxl
 from time import time
 from tqdm import tqdm
 import statsmodels.formula.api as smf
@@ -15,11 +14,10 @@ plt.rcParams['axes.unicode_minus'] = False
 from itertools import product
 from scipy.stats import mode
 from sqlalchemy import create_engine
-from sqlalchemy.types import VARCHAR,DECIMAL
 
 
 class MyFactor:
-    def __init__(self,host:str,user:str,password:str,exchange:str,loadtrd:str = None,stkprice:str = None,start:str = None,end:str = None):
+    def __init__(self,host:str,user:str,password:str,exchange:str,loadtrd:str = None,stkprice:str = None,idxname:str = '沪深300',start:str = None,end:str = None):
         '''
         连接因子数据库,获取因子表列表,交易日历
 
@@ -33,6 +31,8 @@ class MyFactor:
 
         stkprice:用于股票因子回测的价格类型,loadtrd为'stk'时对应的值为{'adjclose'(默认),'adjopen','adjvwap'},loadtrd为'fund'时对应的值恒为'adjnav'
 
+        idxname:用于计算超额收益率的指数名称,包含'沪深300'(默认),'中证500','中证1000','国证2000'
+
         start:读取交易数据的开始日期,'%Y%m%d'格式的日期,start为None时从头开始读
 
         end:读取交易数据的结束日期,'%Y%m%d'格式的日期,end为None时读取到最后一个日期
@@ -42,14 +42,18 @@ class MyFactor:
         self.host,self.user,self.password,self.assettype = host,user,password,loadtrd
         self.factortabledict = self.getfactortables()
         self.trdcalendar = self.gettrdcalendar(exchange)
-        if loadtrd == 'stk':
-            self.price = 'adjclose' if stkprice is None else stkprice
+        if loadtrd is not None:
+            if loadtrd == 'stk':
+                self.price = 'adjclose' if stkprice is None else stkprice
+            elif loadtrd == 'fund':
+                self.price = 'adjnav'
+            self.idx_trd = self.getassettrd('idx',['close'],start,end)
+            self.idx_trd = self.idx_trd.loc[self.idx_trd['code'] == idxname,['trddate','close']].reset_index(drop = True)
+            self.idx_trd.columns = ['trddate','idxprice']
             self.df_trd = self.getassettrd(loadtrd,[self.price,'size'],start,end)
-        elif loadtrd == 'fund':
-            self.price = 'adjnav'
-            self.df_trd = self.getassettrd(loadtrd,[self.price,'size'],start,end)
+            self.df_trd = self.df_trd.merge(self.idx_trd,on = 'trddate',how = 'left')
         elif loadtrd is None:
-            self.price,self.df_trd = None,None
+            self.price,self.df_trd,self.idx_trd = None,None,None
         else:
             raise ValueError('Unsupported loadtrd value')
 
@@ -659,9 +663,9 @@ class MyFactor:
 
         参数:
 
-        assettype:资产类别,'stk'或'fund'
+        assettype:资产类别,'stk'或'fund'或'idx'
 
-        trdlst:values为str,需要提取的列名列表,全部列名见base.stktrd及base.fundtrd
+        trdlst:values为str,需要提取的列名列表,全部列名见base.stktrd,base.fundtrd,base.idxtrd
 
         start,end:读取数据的起始和结束日期,格式为'%Y%m%d'
 
@@ -672,9 +676,10 @@ class MyFactor:
         start = '19900101' if start is None else start
         end = dt.datetime.strftime(dt.datetime.today().date(),format = '%Y%m%d') if end is None else end
         trdstr = '`' + '`,`'.join(trdlst) + '`'
+        if assettype != 'idx':
+            print(f'loading {assettype}trd data...')
+            timestart = time()
         # 读取self.assettype交易数据
-        print(f'loading {assettype}trd data...')
-        timestart = time()
         conn = pymysql.connect(host = self.host,user = self.user,password = self.password,database = 'base',port = 3306,charset = 'utf8mb4')
         cursor = conn.cursor()
         cursor.execute(f'SELECT `trddate`,`code`,{trdstr} FROM {assettype}trd WHERE `trddate` >= {start} and `trddate` <= {end} ORDER BY `trddate`,`code`')
@@ -682,7 +687,8 @@ class MyFactor:
         cursor.close()
         conn.close()
         df_trd[trdlst] = df_trd[trdlst].astype(float)
-        print(f'{assettype}trd data loaded, {time() - timestart:.2f}s passed')
+        if assettype != 'idx':
+            print(f'{assettype}trd data loaded, {time() - timestart:.2f}s passed')
         return df_trd
 
     def savefactor(self,df_factor:pd.DataFrame,tablename:str,if_exist:str = 'append'):
@@ -704,9 +710,6 @@ class MyFactor:
         print(f'Saving FactorTable {tablename}...')
         timestart = time()
         factornamelst = list(df_factor.columns[2:])
-        # 分别为交易日、资产代码和因子列设置不同的存储数据类型
-        dtypedict = {'trddate':VARCHAR(8),'code':VARCHAR(40)}
-        dtypedict.update(dict(zip(factornamelst,[DECIMAL(20,4)]*len(factornamelst))))
         # 建立连接引擎
         engine = create_engine(f'mysql+mysqlconnector://{self.user}:{self.password}@{self.host}/factor')
         if tablename not in self.factortabledict.keys():
@@ -722,7 +725,8 @@ class MyFactor:
             df_factor.to_sql(tablename,con = engine,if_exists = 'replace',index = False)
             # 更新因子表字典
             self.factortabledict[tablename] = factornamelst
-        else:# 数据库中有目标因子表且有新增列,且要求在原始因子值基础上追加(append)
+        else:
+            # 数据库中有目标因子表且有新增列,且要求在原始因子值基础上追加(append)
             # 这里因为to_sql不能新增列,所以当savefactor使用append时手动追加,
             # 将追加后的完整数据replace到原始表上,这样的坏处是更新一个很大的表时会非常慢
             insidelst,outsidelst = self.getinoutside(tablename,factornamelst)
@@ -846,11 +850,11 @@ class MyFactor:
 
     def matchret(self,df:pd.DataFrame)->pd.DataFrame:
         '''
-        为包含trddate,nxtrebalance,code的堆栈数据表拼接收盘价,并计算下一期收益率,新表相比原表增添一列ret,其值为下一期收益率
+        为包含trddate,nxtrebalance,code的堆栈数据表拼接收盘价,并计算下一期收益率,新表相比原表新增1列ret和1列excessret,其值为下一期收益率
         
         参数:
 
-        df:包含code,trddate,nxtrebalance这3列,其中
+        df:包含code,trddate,nxtrebalance这3列(也可能包含其他列),其中
 
             code:str,资产代码
 
@@ -860,7 +864,7 @@ class MyFactor:
         
         输出:
 
-        df:原列均不变,仅仅根据df的trddate,nxtrebalance,code计算了每个资产的下一期收益率,新增1列ret
+        df:原列均不变,仅仅根据df的trddate,nxtrebalance,code计算了每个资产的下一期收益率,新增1列ret和1列excessret
         '''
         # 取出收盘价,去掉日期不是再平衡交易日的数据
         df_window = df[['trddate','nxtrebalance']].drop_duplicates().reset_index(drop = True)
@@ -870,7 +874,7 @@ class MyFactor:
         tqdm.pandas(desc = 'match rebalance ret')
         df_window = df_window.groupby(['trddate','nxtrebalance'],group_keys = False)[['trddate','nxtrebalance']].\
                         apply(lambda x: self.matchret_t(x,df_price),include_groups = False).dropna().reset_index(drop = True)
-        df_window.columns = ['trddate','nxtrebalance','code','ret']
+        df_window.columns = ['trddate','nxtrebalance','code','ret','excessret']
         df = df.merge(df_window,on = ['trddate','nxtrebalance','code'],how = 'left')
         return df
 
@@ -889,19 +893,22 @@ class MyFactor:
             其中包含列self.price:资产价格
 
         输出:
-        currret:df_price中包含的资产在trddate和nxtrebalance之间的收益率
+        currret:df_price中包含的资产及指数在trddate和nxtrebalance之间的收益率
         '''
         start,end = df_window_t['trddate'].values[0],df_window_t['nxtrebalance'].values[0]
         startprice = df_price.loc[df_price['trddate'] == start,['code',self.price]]
+        idxstartprice = self.idx_trd.loc[self.idx_trd['trddate'] == start,'idxprice'].values[0]
         endprice = df_price.loc[df_price['trddate'] == end,['code',self.price]]
+        idxendprice = self.idx_trd.loc[self.idx_trd['trddate'] == end,'idxprice'].values[0]
         currret = startprice.rename(columns = {self.price:'startprice'}).\
-                    merge(endprice.rename(columns = {self.price:'endprice'}),on = 'code',how = 'outer')
+                merge(endprice.rename(columns = {self.price:'endprice'}),on = 'code',how = 'outer')
         currret['ret'] = currret['endprice']/currret['startprice'] - 1
+        currret['excessret'] = currret['ret'] - idxendprice/idxstartprice + 1
         currret.loc[:,['trddate','nxtrebalance']] = start,end
-        currret = currret[['trddate','nxtrebalance','code','ret']]
+        currret = currret[['trddate','nxtrebalance','code','ret','excessret']]
         return currret
 
-    def fama_macbeth(self,df_factor:pd.DataFrame,lag:Optional[int] = None)->FamaMacBeth:
+    def fama_macbeth(self,df_factor:pd.DataFrame,lag:Optional[int] = None)->List[FamaMacBeth]:
         '''
         根据输入的因子表将收益率向全部因子做Fama-Mecbeth回归
         
@@ -914,10 +921,10 @@ class MyFactor:
             第2列为code
     
             第3~end列为fama-macbeth回归的解释变量
-        
+
         输出:
 
-        famamacbeth:linearmodels.FamaMecbeth对象
+        [famamacbeth1,famamacbeth2]:分别使用原始收益率和超额收益率回归的linearmodels.FamaMecbeth对象列表
         '''
         if self.df_trd is None:
             raise ValueError('Base trade data not loaded, unable to execute fama-macbeth.')
@@ -928,7 +935,7 @@ class MyFactor:
         df_factor = df_factor.dropna(subset = 'nxtrebalance').reset_index(drop = True)
         # 根据trddate和nxtrebalence获取下一期收益率
         df_factor = self.matchret(df_factor)
-        df_factor = df_factor.loc[:,['trddate','code','ret'] + factorlst].dropna().reset_index(drop = True)
+        df_factor = df_factor.loc[:,['trddate','code','ret','excessret'] + factorlst].dropna().reset_index(drop = True)
         # 调整日期数据类型
         df_factor['trddate'] = pd.to_datetime(df_factor['trddate'])
         # 计算滞后项阶数
@@ -936,11 +943,14 @@ class MyFactor:
         # 设置双重index,注意索引顺序
         df_factor.set_index(['code','trddate'],inplace = True)
         # 写出回归方程
-        formula = 'ret~1+' + '+'.join(factorlst)
+        formula1 = 'ret~1+' + '+'.join(factorlst)
+        formula2 = 'excessret~1+' + '+'.join(factorlst)
         # Fama-MacBeth回归
-        mod = FamaMacBeth.from_formula(formula,data = df_factor)
-        famamacbeth = mod.fit(cov_type = 'kernel',debiased = False,bandwidth = lag)
-        return famamacbeth
+        mod1 = FamaMacBeth.from_formula(formula1,data = df_factor)
+        mod2 = FamaMacBeth.from_formula(formula2,data = df_factor)
+        famamacbeth1 = mod1.fit(cov_type = 'kernel',debiased = False,bandwidth = lag)
+        famamacbeth2 = mod2.fit(cov_type = 'kernel',debiased = False,bandwidth = lag)
+        return famamacbeth1,famamacbeth2
 
     def singlesort(self,df_factor:pd.DataFrame,g:int = 5,rebalance:Optional[Union[List[str],np.array]] = None,weight:Optional[pd.DataFrame] = None,ascending:Optional[List[bool]] = None,fee:float = 0.003):
         '''
@@ -984,51 +994,50 @@ class MyFactor:
         # 引入交易日和资产交易数据,将因子表和交易数据,再平衡日期,分组权重相互匹配
         df_factor = self.matchsinglesort(df_factor,rebalance,weight,ascending)
         # ICIR
-        df_ic = df_factor_icir.groupby('trddate',group_keys = False)[['trddate','code','ret'] + self.factornamelst].apply(self.getic_t,include_groups = False)
-        df_avgic = df_ic.groupby('factorname',group_keys = False)[[f'{self.assettype}num','ic(%)','rankic(%)']].apply(lambda x: x.mean()).reset_index()
-        df_avgic.columns = ['factorname',f'avg{self.assettype}num','avgic(%)','avgrankic(%)']
-        df_icir = df_ic.groupby('factorname',group_keys = False)[['ic(%)','rankic(%)']].apply(lambda x: x.mean()/x.std()).reset_index()
-        df_icir.columns = ['factorname','ir','rankir']
+        df_ic = df_factor_icir.groupby('trddate',group_keys = False)[['trddate','code','ret','excessret'] + self.factornamelst].apply(self.getic_t,include_groups = False)
+        df_avgic = df_ic.groupby('factorname',group_keys = False)[[f'{self.assettype}num','ic(%)','rankic(%)','excess ic(%)','excess rankic(%)']].apply(lambda x: x.mean()).reset_index()
+        df_avgic.columns = ['factorname',f'avg {self.assettype}num','avg ic(%)','avg rankic(%)','avg excess ic(%)','avg excess rankic(%)']
+        df_icir = df_ic.groupby('factorname',group_keys = False)[['ic(%)','rankic(%)','excess ic(%)','excess rankic(%)']].apply(lambda x: x.mean()/x.std()).reset_index()
+        df_icir.columns = ['factorname','ir','rankir','excess ir','excess rankir']
         df_icir = df_avgic.merge(df_icir,on = 'factorname',how = 'left')
         # 因子相关系数矩阵
-        factorcorr = df_factor_icir.groupby('trddate',group_keys = False)[['trddate'] + self.factornamelst].apply(self.getcorr_t,include_groups = False)
-        factorcorr = factorcorr.groupby('factorname',group_keys = False)[self.factornamelst].mean().reset_index()
+        df_corr = df_factor_icir.groupby('trddate',group_keys = False)[['trddate'] + self.factornamelst].apply(self.getcorr_t,include_groups = False)
+        df_corr = df_corr.groupby('factorname',group_keys = False)[self.factornamelst].mean().reset_index()
         # 分组并计算收益率
         singlesort_id_dict,singlesort_ret_dict,singlesort_netval_dict = dict(),dict(),dict()
         singlesort_fee_dict,singlesort_trdret_dict,singlesort_trdnetval_dict = dict(),dict(),dict()
-        lastweightlst,dweightlst = [f'last{weightname}' for weightname in self.weightlst],[f'd{weightname}' for weightname in self.weightlst]
-        feeweightlst,trdweightlst = [f'fee{weightname}' for weightname in self.weightlst],[f'trd{weightname}' for weightname in self.weightlst]
-        renamedict = dict(zip(['trddate','nxttrddate'] + self.weightlst,['lasttrddate','trddate'] + lastweightlst))
-        df_ratios = pd.DataFrame(columns = ['factorname','weight','id','annret','anntrdret','retmaxdrawdown','trdretmaxdrawdown','rettval','trdrettval'])
-        idlst = [str(p) for p in range(1,self.g + 1)] + ['longshort']
+        lastweightlst = [f'last{weight}' for weight in self.weightlst]
+        dweightlst = [f'd{weight}' for weight in self.weightlst]
+        feeweightlst = [f'fee{weight}' for weight in self.weightlst]
+        self.trdweightlst = [f'trd {weight}' for weight in self.weightlst]
+        self.excessweightlst = [f'excess {weight}' for weight in self.weightlst]
+        self.excesstrdweightlst = [f'excess trd {weight}' for weight in self.weightlst]
+        df_ratios = pd.DataFrame(columns = ['factorname','weight','id','annret','annexcessret','anntrdret','annexcesstrdret',\
+                    'retmaxdrawdown','excessretmaxdrawdown','trdretmaxdrawdown','excesstrdretmaxdrawdown','rettval','excessrettval','trdrettval','excesstrdrettval'])
         for factorname in self.factornamelst:
             # 取出仅包含单个因子的因子表
-            df_factor_ = df_factor[['trddate','code','ret'] + self.weightlst + [factorname]].dropna().reset_index(drop = True)
+            df_factor_ = df_factor[['trddate','code','ret','excessret'] + self.weightlst + [factorname]].dropna().reset_index(drop = True)
             # 计算分组结果
             df_id = df_factor_.groupby('trddate',group_keys = False)\
-                        [['trddate','code','ret'] + self.weightlst + [factorname]].apply(self.singlesort_id_t,include_groups = False)
+                        [['trddate','code','ret','excessret'] + self.weightlst + [factorname]].apply(self.singlesort_id_t,include_groups = False)
             # 根据分组结果计算多空组合股票权重
             df_factor_longshort = df_id.loc[df_id['id'].isin([str(self.g),'1']),:]
             # 空头部分权重乘-1
             df_factor_longshort.loc[df_factor_longshort['id'] == '1',self.weightlst] = -df_factor_longshort.loc[df_factor_longshort['id'] == '1',self.weightlst]
             # 合并相同资产的多空权重
-            df_factor_longshort = df_factor_longshort.groupby(['trddate','code','ret'],group_keys = False)[self.weightlst].sum().reset_index()
+            df_factor_longshort = df_factor_longshort.groupby(['trddate','code','ret','excessret'],group_keys = False)[self.weightlst].sum().reset_index()
             df_factor_longshort['id'] = 'longshort'
             # 把多空权重合并到原组合权重上
             df_id = pd.concat([df_id,df_factor_longshort]).sort_values(['trddate','id','code'])
-            # 计算分组收益率
-            df_ret = df_id.groupby('trddate',group_keys = False)[['trddate','code','id','ret'] + self.weightlst].\
-                                    apply(self.singlesort_ret_t,include_groups = False).sort_values(['trddate','id'])
-            # 分组累计净值
-            df_netval = df_ret.groupby('id',group_keys = False)[['trddate','id'] + self.weightlst].\
-                                    apply(self.getnetval_id,include_groups = False).sort_values(['trddate','id'])
+            singlesort_id_dict[factorname] = df_id[['trddate','code','id'] + self.weightlst]
             # 根据当期权重和上一期权重计算前后两期各资产权重变动,这里需要精确匹配每只股票前一期的权重
             df_datematch = pd.DataFrame(df_id['trddate'].drop_duplicates().sort_values(),columns = ['trddate'])
             df_datematch['lasttrddate'] = df_datematch['trddate'].shift(1)
             df_datematch['nxttrddate'] = df_datematch['trddate'].shift(-1)
             # 为原始权重匹配前一期的权重
             df_idfee = df_id.merge(df_datematch,on = 'trddate',how = 'left')
-            df_idmatch = df_idfee[['nxttrddate','trddate','code','id'] + self.weightlst].rename(columns = renamedict)
+            df_idmatch = df_idfee[['nxttrddate','trddate','code','id'] + self.weightlst].\
+                        rename(columns = dict(zip(['trddate','nxttrddate'] + self.weightlst,['lasttrddate','trddate'] + lastweightlst)))
             df_idfee = df_idfee.merge(df_idmatch,on = ['trddate','lasttrddate','code','id'],how = 'outer').dropna(subset = 'trddate')
             df_idfee = df_idfee.drop(['lasttrddate','nxttrddate'],axis = 1).fillna(0)
             # 计算前后两期权重变动的绝对值并求和,用于计算费用
@@ -1036,39 +1045,51 @@ class MyFactor:
             df_fee = df_idfee.groupby(['trddate','id'],group_keys = False)[dweightlst].sum().reset_index()
             df_fee.loc[:,dweightlst] = df_idfee.loc[:,dweightlst]*fee
             df_fee = df_fee.rename(columns = dict(zip(dweightlst,feeweightlst))).sort_values(['trddate','id'])
+            singlesort_fee_dict[factorname] = df_fee
+            # 计算分组收益率
+            df_ret = df_id.groupby('trddate',group_keys = False)[['trddate','code','id','ret','excessret'] + self.weightlst].\
+                                    apply(self.singlesort_ret_t,include_groups = False).sort_values(['trddate','id'])
+            singlesort_ret_dict[factorname] = df_ret
+            # 分组累计净值
+            df_netval = df_ret.groupby('id',group_keys = False)[['trddate','id'] + self.weightlst + self.excessweightlst].\
+                                apply(self.getnetval_id,include_groups = False).sort_values(['trddate','id'])
+            singlesort_netval_dict[factorname] = df_netval
             # 把费率表和分组收益率表合并,计算出考虑费率的组合收益率
             df_trdret = df_ret.merge(df_fee,on = ['trddate','id'],how = 'left')
-            df_trdret.loc[:,trdweightlst] = (1 + df_trdret.loc[:,self.weightlst].values)*(1 - df_trdret.loc[:,feeweightlst].values) - 1
-            df_trdret = df_trdret.loc[:,['trddate','id'] + trdweightlst].sort_values(['trddate','id'])
-            # 考虑交易费用的分组累计净值
-            df_trdnetval = df_trdret.groupby('id',group_keys = False)[['trddate','id'] + trdweightlst].\
-                                    apply(self.getnetval_id,include_groups = False).sort_values(['trddate','id'])
-            # 存储分组结果和分组收益率
-            singlesort_id_dict[factorname] = df_id[['trddate','code','id'] + self.weightlst]
-            singlesort_ret_dict[factorname] = df_ret
-            singlesort_netval_dict[factorname] = df_netval
-            singlesort_fee_dict[factorname] = df_fee
+            df_trdret.loc[:,self.trdweightlst] = (1 + df_trdret.loc[:,self.weightlst].values)*(1 - df_trdret.loc[:,feeweightlst].values) - 1
+            df_trdret.loc[:,self.excesstrdweightlst] = (1 + df_trdret.loc[:,self.excessweightlst].values)*(1 - df_trdret.loc[:,feeweightlst].values) - 1
+            df_trdret = df_trdret.loc[:,['trddate','id'] + self.trdweightlst + self.excesstrdweightlst].sort_values(['trddate','id'])
             singlesort_trdret_dict[factorname] = df_trdret
+            # 考虑交易费用的分组累计净值
+            df_trdnetval = df_trdret.groupby('id',group_keys = False)[['trddate','id'] + self.trdweightlst + self.excesstrdweightlst].\
+                                    apply(self.getnetval_id,include_groups = False).sort_values(['trddate','id'])
             singlesort_trdnetval_dict[factorname] = df_trdnetval
             for weight in self.weightlst:
-                for id in idlst:
+                for id in [str(i + 1) for i in range(self.g)] + ['longshort']:
                     # 读取收益率和净值数据
-                    df_ret_id = df_ret.loc[df_ret['id'] == id,['trddate'] + [weight]]
-                    df_trdret_id = df_trdret.loc[df_trdret['id'] == id,['trddate'] + [f'trd{weight}']]
-                    df_netval_id = df_netval.loc[df_netval['id'] == id,['trddate'] + [weight]]
-                    df_trdnetval_id = df_trdnetval.loc[df_trdnetval['id'] == id,['trddate'] + [f'trd{weight}']]
+                    df_ret_id = df_ret.loc[df_ret['id'] == id,['trddate',weight,f'excess {weight}']]
+                    df_netval_id = df_netval.loc[df_netval['id'] == id,['trddate',weight,f'excess {weight}']]
+                    df_trdret_id = df_trdret.loc[df_trdret['id'] == id,['trddate',f'trd {weight}',f'excess trd {weight}']]
+                    df_trdnetval_id = df_trdnetval.loc[df_trdnetval['id'] == id,['trddate',f'trd {weight}',f'excess trd {weight}']]
                     # 年化收益率
                     ann_ret = MyFactor.ret2annual(df_ret_id[['trddate',weight]])
-                    ann_trdret = MyFactor.ret2annual(df_trdret_id[['trddate',f'trd{weight}']])
+                    ann_excessret = MyFactor.ret2annual(df_ret_id[['trddate',f'excess {weight}']])
+                    ann_trdret = MyFactor.ret2annual(df_trdret_id[['trddate',f'trd {weight}']])
+                    ann_excesstrdret = MyFactor.ret2annual(df_trdret_id[['trddate',f'excess trd {weight}']])
                     # 最大回撤
                     maxdrawdown_ret = MyFactor.maxdrawdown(df_netval_id[weight])
-                    maxdrawdown_trdret = MyFactor.maxdrawdown(df_trdnetval_id[f'trd{weight}'])
+                    maxdrawdown_excessret = MyFactor.maxdrawdown(df_netval_id[f'excess {weight}'])
+                    maxdrawdown_trdret = MyFactor.maxdrawdown(df_trdnetval_id[f'trd {weight}'])
+                    maxdrawdown_excesstrdret = MyFactor.maxdrawdown(df_trdnetval_id[f'excess trd {weight}'])
                     # t值
                     tval_ret = MyFactor.newey_west_test(df_ret_id[weight])
-                    tval_trdret = MyFactor.newey_west_test(df_trdret_id[f'trd{weight}'])
+                    tval_excessret = MyFactor.newey_west_test(df_ret_id[f'excess {weight}'])
+                    tval_trdret = MyFactor.newey_west_test(df_trdret_id[f'trd {weight}'])
+                    tval_excesstrdret = MyFactor.newey_west_test(df_trdret_id[f'excess trd {weight}'])
                     # 存储结果
-                    df_ratios.loc[len(df_ratios)] = [factorname,weight,id,ann_ret,ann_trdret,maxdrawdown_ret,maxdrawdown_trdret,tval_ret,tval_trdret]
-        return SingleSort(df_ic,df_icir,df_ratios,factorcorr,singlesort_id_dict,singlesort_ret_dict,singlesort_netval_dict,singlesort_fee_dict,singlesort_trdret_dict,singlesort_trdnetval_dict)
+                    df_ratios.loc[len(df_ratios)] = [factorname,weight,id,ann_ret,ann_excessret,ann_trdret,ann_excesstrdret,\
+                                                     maxdrawdown_ret,maxdrawdown_excessret,maxdrawdown_trdret,maxdrawdown_excesstrdret,tval_ret,tval_excessret,tval_trdret,tval_excesstrdret]
+        return SingleSort(df_ic,df_icir,df_corr,df_ratios,singlesort_id_dict,singlesort_ret_dict,singlesort_netval_dict,singlesort_fee_dict,singlesort_trdret_dict,singlesort_trdnetval_dict)
 
     def getnetval_id(self,df_ret_id)->pd.DataFrame:
         '''
@@ -1078,13 +1099,13 @@ class MyFactor:
             df_ret_id:一个分组的收益率表,各行id相等
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
                 第2列为id:str,1~g的分组结果及longshort
-                第3~len(self.weightlst)+3列为self.weightlst:float,自定义加权的分组收益率
-        
+                第3~2*len(self.weightlst)+3列为self.weightlst:float,自定义加权的分组收益率及分组超额收益率
+
         输出:
             df_netval_id:一个分组的资产组合净值表,各行id相等
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
                 第2列为id:str,1~g的分组结果及longshort
-                第3~len(self.weightlst)+3列为self.weightlst:float,自定义加权的分组净值
+                第3~2*len(self.weightlst)+3列为self.weightlst:float,自定义加权的分组净值及分组超额净值
         '''
         weightlst = list(df_ret_id.columns[2:])
         df_netval_id = df_ret_id.loc[:,['trddate','id']]
@@ -1123,27 +1144,33 @@ class MyFactor:
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
                 第2列为code:str,资产代码
                 第3列为ret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的累计收益率
-                第4~4+len(self.factornamelst)列为正向的因子值:float
+                第4列为excessret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的超额收益率
+                第5~5+len(self.factornamelst)列为正向的因子值:float
 
         输出:
-            df_ic_t:多个因子的单期ic表,共5列
+            df_ic_t:多个因子的单期ic表,共7列
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
                 第2列为factorname:str,因子名
                 第3列为当期完整的股票和因子数据条数:int
                 第4列为ic(%):float,当期的因子ic
                 第5列为rankic(%):float,当期因子rankic
+                第6列为excess ic(%):float,当期的因子关于超额收益率的ic
+                第7列为excess rankic(%):float,当期因子关于超额收益率的rankic
         '''
-        df_ic_t = pd.DataFrame(np.full([len(self.factornamelst),5],None),columns = ['trddate','factorname',f'{self.assettype}num','ic(%)','rankic(%)'])
+        df_ic_t = pd.DataFrame(np.full([len(self.factornamelst),7],None),columns = ['trddate','factorname',f'{self.assettype}num','ic(%)','rankic(%)','excess ic(%)','excess rankic(%)'])
         df_ic_t.loc[:,'trddate'] = df_factor_t['trddate'].values[0]
         df_ic_t.loc[:,'factorname'] = self.factornamelst
         df_ic_t.loc[:,f'{self.assettype}num'] = 0
         for i in range(len(self.factornamelst)):
             factorname = self.factornamelst[i]
             curr_factor_ret = df_factor_t.loc[:,['ret',factorname]].dropna()
+            curr_factor_excessret = df_factor_t.loc[:,['excessret',factorname]].dropna()
             if len(curr_factor_ret) != 0:
                 df_ic_t.iloc[i,2] = len(curr_factor_ret)
                 df_ic_t.iloc[i,3] = curr_factor_ret.corr().iloc[1,0]*100
                 df_ic_t.iloc[i,4] = curr_factor_ret.corr('spearman').iloc[1,0]*100
+                df_ic_t.iloc[i,5] = curr_factor_excessret.corr().iloc[1,0]*100
+                df_ic_t.iloc[i,6] = curr_factor_excessret.corr('spearman').iloc[1,0]*100
         return df_ic_t
 
     def singlesort_id_t(self,df_factor_t:pd.DataFrame)->pd.DataFrame:
@@ -1155,10 +1182,11 @@ class MyFactor:
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
                 第2列为code:str,资产代码
                 第3列为ret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的累计收益率
-                第4列为single:int,全部为1,组内等权重加权的权重
-                第5列为size:float,资产市值,组内市值加权的权重
-                [weight不为None时]第6~np.size(weight,1)+6列为weight.columns[2:]:float,组内自定义方式加权的权重
-                第np.size(weight,1)+7列为正向的因子值
+                第4列为excessret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的超额收益率
+                第5列为single:int,全部为1,组内等权重加权的权重
+                第6列为size:float,资产市值,组内市值加权的权重
+                [weight不为None时]第7~np.size(weight,1)+7列为weight.columns[2:]:float,组内自定义方式加权的权重
+                第np.size(weight,1)+8列为正向的因子值
 
         输出:
             df_id_t:资产分组结果和归一化后的权重表
@@ -1166,9 +1194,10 @@ class MyFactor:
                 第2列为code:str,资产代码
                 第3列为id:int,1~g的分组结果
                 第4列为ret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的累计收益率
-                第5列为single:int,相同id全部相等,归一化的组内等权重加权的权重
-                第6列为size:float,归一化的组内市值加权的权重
-                [weight不为None时]第7~np.size(weight,1)+7列为weight.columns[2:]:float,归一化的组内自定义方式加权的权重
+                第5列为excessret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的超额收益率
+                第6列为single:int,相同id全部相等,归一化的组内等权重加权的权重
+                第7列为size:float,归一化的组内市值加权的权重
+                [weight不为None时]第8~np.size(weight,1)+8列为weight.columns[2:]:float,归一化的组内自定义方式加权的权重
         '''
         factorname = df_factor_t.columns[-1]
         # 分为g组，共g+1个分割点(包括最大值和最小值)
@@ -1177,16 +1206,17 @@ class MyFactor:
             # 无法分组时是因为同一时期资产数量过少或大量因子值相同,此时将收益率全部置为0并随机分组
             print(f'Single sort fail to split {factorname} {df_factor_t['trddate'].values[0]} data into {self.g} parts, please check factor value or decrease group num.')
             df_factor_t.loc[:,'ret'] = 0
+            df_factor_t.loc[:,'excessret'] = 0
             df_factor_t.loc[:,'id'] = np.random.randint(1,self.g + 1,len(df_factor_t)).astype('str')
         else:# 分组
             df_factor_t.loc[:,'id'] = pd.cut(df_factor_t[factorname],include_lowest = True,bins = percentile,labels = np.arange(1,self.g+1)).astype('str')
         # 权重归一化
-        df_id_t = df_factor_t.groupby('id',group_keys = False)[['trddate','code','id','ret'] + self.weightlst].apply(self.weightnormalize,include_groups = False)
+        df_id_t = df_factor_t.groupby('id',group_keys = False)[['trddate','code','id','ret','excessret'] + self.weightlst].apply(self.weightnormalize,include_groups = False)
         return df_id_t
 
     def singlesort_ret_t(self,df_id_t:pd.DataFrame)->pd.DataFrame:
         '''
-        (聚合函数,用于apply)在截面上根据单个因子对股票的分组结果计算分组收益率
+        (聚合函数,用于apply)在截面上根据单个因子对股票的分组结果计算分组收益率和超额收益率
 
         参数:
             df_id_t:singlesort_id_t的输出,资产分组结果和归一化后的权重表
@@ -1194,9 +1224,10 @@ class MyFactor:
                 第2列为code:str,资产代码
                 第3列为id:int,1~g的分组结果
                 第4列为ret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的累计收益率
-                第5列为single:int,相同id全部相等,归一化的组内等权重加权的权重
-                第6列为size:float,归一化的组内市值加权的权重
-                [weight不为None时]第7~np.size(weight,1)+7列为weight.columns[2:]:float,归一化的组内自定义方式加权的权重
+                第5列为excessret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的超额收益率
+                第6列为single:int,相同id全部相等,归一化的组内等权重加权的权重
+                第7列为size:float,归一化的组内市值加权的权重
+                [weight不为None时]第8~np.size(weight,1)+8列为weight.columns[2:]:float,归一化的组内自定义方式加权的权重
 
         输出:
             df_ret_t:分组收益率
@@ -1205,11 +1236,19 @@ class MyFactor:
                 第3列为single:float,等权重加权的分组收益率
                 第4列为size:float,市值加权的分组收益率
                 [weight不为None时]第5~np.size(weight,1)+5列为weight.columns[2:]:float,自定义加权的分组收益率
+                第np.size(weight,1)+5列为excess single:float,等权重加权的分组超额收益率
+                第np.size(weight,1)+6列为excess size:float,市值加权的分组超额收益率
+                [weight不为None时]第np.size(weight,1)+7~2*np.size(weight,1)+7列为weight.columns[2:]:float,自定义加权的分组超额收益率
         '''
         # 根据分组结果group,计算分组收益率
         df_ret_t = df_id_t.groupby('id',group_keys = False)[['trddate','id','ret'] + self.weightlst].\
-                        apply(self.retgroup,include_groups = False).reset_index(drop = True)
+                        apply(lambda x: self.retgroup(x,'ret'),include_groups = False).reset_index(drop = True)
+        df_excessret_t = df_id_t.groupby('id',group_keys = False)[['trddate','id','excessret'] + self.weightlst].\
+                        apply(lambda x: self.retgroup(x,'excessret'),include_groups = False).reset_index(drop = True)
         df_ret_t = df_ret_t[['trddate','id'] + self.weightlst]
+        df_excessret_t = df_excessret_t[['trddate','id'] + self.weightlst]
+        df_excessret_t = df_excessret_t.rename(columns = dict(zip(self.weightlst,self.excessweightlst)))
+        df_ret_t = df_ret_t.merge(df_excessret_t,on = ['trddate','id'],how = 'left')
         return df_ret_t
 
     def weightnormalize(self,factor_weight:pd.DataFrame)->pd.DataFrame:
@@ -1217,10 +1256,10 @@ class MyFactor:
         factor_weight.loc[:,self.weightlst] = factor_weight[self.weightlst]/factor_weight[self.weightlst].sum()
         return factor_weight
 
-    def retgroup(self,factor_ret:pd.DataFrame)->pd.DataFrame:
+    def retgroup(self,factor_ret:pd.DataFrame,retcol:str)->pd.DataFrame:
         '''(聚合函数,用于apply)计算分组收益率'''
         trddate,id = factor_ret['trddate'].values[0],factor_ret['id'].values[0]
-        factor_group = factor_ret[['ret']].T@factor_ret[self.weightlst]
+        factor_group = factor_ret[[retcol]].T@factor_ret[self.weightlst]
         factor_group[['trddate','id']] = trddate,id
         return factor_group
 
@@ -1253,20 +1292,22 @@ class MyFactor:
 
         输出:
 
-        df_factor:符合MyFactor.stdformat输出要求的因子表,非正向因子全部转为正向因子,共2(trddate,code) + 2(组内等权重,组内市值加权) + weight数量 + factor数量 + 1(ret)列
+        df_factor:符合MyFactor.stdformat输出要求的因子表,非正向因子全部转为正向因子,共2(trddate,code) + 2(组内等权重,组内市值加权) + weight数量 + factor数量 + 2(ret,excessret)列
             第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
             
             第2列为code:str,资产代码
             
             第3列为ret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的累计收益率
+
+            第4列为excessret:float,资产从当前再平衡日期开始,到下一个再平衡日期截止的超额收益率
+
+            第5列为single:int,全部为1,组内等权重加权的权重
             
-            第4列为single:int,全部为1,组内等权重加权的权重
+            第6列为size:float,资产市值,组内市值加权的权重
             
-            第5列为size:float,资产市值,组内市值加权的权重
+            [weight不为None时]第7~np.size(weight,1)+7列为weight.columns:float,组内自定义方式加权的权重
             
-            [weight不为None时]第6~np.size(weight,1)+6列为weight.columns:float,组内自定义方式加权的权重
-            
-            第np.size(weight,1)+7~np.size(df_factor.loc[:,2:])+np.size(weight,1)+7列为df_factor.columns[2:]:float,转为正向的因子值
+            第np.size(weight,1)+8~np.size(df_factor.loc[:,2:])+np.size(weight,1)+8列为df_factor.columns[2:]:float,转为正向的因子值
         '''
         if self.df_trd is None:
             raise ValueError('Base trade data not loaded, unable to execute singlesort.')
@@ -1317,7 +1358,7 @@ class MyFactor:
         # 根据trddate和nxtrebalance为因子表匹配下一期收益率
         df_factor = self.matchret(df_factor)
         # 删掉计算时的冗余列
-        df_factor = df_factor[['trddate','code','ret'] + self.weightlst + self.factornamelst].reset_index(drop = True)
+        df_factor = df_factor[['trddate','code','ret','excessret'] + self.weightlst + self.factornamelst].reset_index(drop = True)
         if ascending is not None:
             # 把非正向因子转为正向因子
             ascendingdict = dict(zip(self.factornamelst,list(ascending)))
@@ -1339,11 +1380,11 @@ class MyFactor:
             return pd.DataFrame()
 
 class SingleSort:
-    def __init__(self,df_ic:pd.DataFrame,df_icir:pd.DataFrame,df_ratios:pd.DataFrame,factorcorr:pd.DataFrame,dict_id:Dict[str,pd.DataFrame],dict_ret:Dict[str,pd.DataFrame],dict_netval:Dict[str,pd.DataFrame],dict_fee:Dict[str,pd.DataFrame],dict_trdret:Dict[str,pd.DataFrame],dict_trdnetval:Dict[str,pd.DataFrame]):
+    def __init__(self,df_ic:pd.DataFrame,df_icir:pd.DataFrame,df_corr:pd.DataFrame,df_ratios:pd.DataFrame,dict_id:Dict[str,pd.DataFrame],dict_ret:Dict[str,pd.DataFrame],dict_netval:Dict[str,pd.DataFrame],dict_fee:Dict[str,pd.DataFrame],dict_trdret:Dict[str,pd.DataFrame],dict_trdnetval:Dict[str,pd.DataFrame]):
         '''
         SingleSort类专用于存储和获取单分组结果,画图
 
-        df_ic:因子IC,共5列
+        df_ic:因子IC,共7列
             
             第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
             
@@ -1355,7 +1396,11 @@ class SingleSort:
             
             第5列为rankic(%):float,因子当期rankic
 
-        df_icir:因子ICIR,共5列
+            第6列为excess ic(%):float,当期的因子关于超额收益率的ic
+
+            第7列为excess rankic(%):float,当期因子关于超额收益率的rankic
+
+        df_icir:因子ICIR,共8列
             
             第1列为factorname:str,因子名
             
@@ -1365,31 +1410,47 @@ class SingleSort:
             
             第4列为avgrankic(%):float,因子时序平均rankic
             
-            第5列为ir:float,因子在整个回测期内的ir
+            第5列为ir:float
             
-            第6列为rankir:float,因子在整个回测期内的rankir
+            第6列为rankir:float
 
-        df_ratios:因子分组年化收益率,最大回撤率,收益率的newey-west t值,共9列
-            
+            第7列为excess ir(%):float,因子关于超额收益率的ir
+
+            第8列为excess rankir(%):float,因子关于超额收益率的rankir
+
+        df_corr:因子相关系数表,方阵,因子截面相关系数矩阵的均值
+
+        df_ratios:因子分组年化收益率,最大回撤率,收益率的newey-west t值,共15列
+
             第1列为factorname:str,因子名
-            
+
             第2列为weight:str,组合加权方式
 
-            第3列为id:str,1~g的分组结果以及'singlesort'
+            第3列为id:str,第1组,第g组的分组结果以及'singlesort'
 
             第4列为annret:float,不考虑费用的组合年化收益率
 
-            第5列为anntrdret:float,考虑费用的组合年化收益率
+            第5列为annexcessret:float,不考虑费用的组合年化超额收益率
 
-            第6列为retmaxdrawdown:float,不考虑费用的组合最大回撤率
+            第6列为anntrdret:float,考虑费用的组合年化收益率
 
-            第7列为trdretmaxdrawdown:float,考虑费用的组合最大回撤率
+            第7列为annexcesstrdret:float,不考虑费用的组合年化超额收益率
 
-            第8列为rettval:float,不考虑费用的组合收益率t值
+            第8列为retmaxdrawdown:float,不考虑费用的组合最大回撤率
 
-            第9列为trdrettval:float,考虑费用的组合收益率t值
+            第9列为excessretmaxdrawdown:float,不考虑费用的组合超额最大回撤率
 
-        factorcorr:因子相关系数表,方阵,因子截面相关系数矩阵的均值
+            第10列为trdretmaxdrawdown:float,考虑费用的组合最大回撤率
+
+            第11列为excesstrdretmaxdrawdown:float,考虑费用的组合超额最大回撤率
+
+            第12列为rettval:float,不考虑费用的组合收益率t值
+
+            第13列为excessrettval:float,不考虑费用的组合超额收益率t值
+
+            第14列为trdrettval:float,考虑费用的组合收益率t值
+
+            第15列为excesstrdrettval:float,考虑费用的组合超额收益率t值
 
         dict_id:资产分组表
 
@@ -1415,19 +1476,19 @@ class SingleSort:
 
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
 
-                第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的分组收益率
+                第3~3+2*len(self.weightlst)列为weightlst:float,各种加权方式的分组收益率和分组超额收益率
 
-        dict_netval:考虑交易费用的组合净值表
+        dict_netval:不考虑交易费用的组合净值表
 
             keys:因子名
 
-            values:df_netval,考虑交易费用的组合净值表
+            values:df_netval,不考虑交易费用的组合净值表
 
                 第1列为trddate:str,格式为'%Y%m%d'统一设置为再平衡交易日
                 
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
 
-                第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的组合净值
+                第3~3+2*len(self.weightlst)列为weightlst:float,各种加权方式的分组净值和分组超额净值
 
         dict_fee:组合交易费用表
 
@@ -1451,8 +1512,8 @@ class SingleSort:
 
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
 
-                第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的交易费用下的组合收益率
-        
+                第3~3+2*len(self.weightlst)列为weightlst:float,各种加权方式的交易费用下的分组收益率和分组超额收益率
+
         dict_trdnetval:考虑交易费用的组合净值表
 
             keys:因子名
@@ -1463,21 +1524,21 @@ class SingleSort:
 
                 第2列为id:str(int),1~g的分组结果以及'singlesort'
 
-                第3~3+len(self.weightlst)列为weightlst:float,各种加权方式的交易费用下的组合净值
+                第3~3+2*len(self.weightlst)列为weightlst:float,各种加权方式的交易费用下的分组净值和分组超额净值
         '''
         self.factornamelst = list(dict_id.keys())
         self.weightlst = list(dict_id[self.factornamelst[0]].columns[3:])
         self.df_ic = df_ic
         self.df_icir = df_icir
+        self.df_corr = df_corr
         self.df_ratios = df_ratios
-        self.factorcorr = factorcorr
         self.dict_id = dict_id
         self.dict_ret = dict_ret
         self.dict_netval = dict_netval
         self.dict_fee = dict_fee
         self.dict_trdret = dict_trdret
         self.dict_trdnetval = dict_trdnetval
-    
+
     def get_factorname(self)->List[str]:
         '''获取因子列表'''
         return self.factornamelst
@@ -1489,14 +1550,14 @@ class SingleSort:
     def get_icir(self)->pd.DataFrame:
         '''获取因子ICIR'''
         return self.df_icir
-    
-    def get_ratios(self)->pd.DataFrame:
-        '''获取组合年化收益率,最大回撤率,收益率t值'''
-        return self.df_ratios
 
     def get_corr(self)->pd.DataFrame:
         '''获取因子截面相关系数矩阵的时序均值'''
-        return self.factorcorr
+        return self.df_corr
+
+    def get_ratios(self)->pd.DataFrame:
+        '''获取组合年化收益率,最大回撤率,收益率t值'''
+        return self.df_ratios
 
     def get_id(self)->Dict[str,pd.DataFrame]:
         '''获取分组结果'''
@@ -1533,29 +1594,39 @@ class SingleSort:
         considerfee:False时输出不考虑交易费用的累计净值,True时输出考虑交易费用的累计净值
         '''
         factornum,weightnum = len(self.factornamelst),len(self.weightlst)
-        fig,axs = plt.subplots(weightnum,factornum,figsize = [factornum*10,weightnum*5])
+        fig,axs = plt.subplots(weightnum*2,factornum,figsize = [factornum*10,weightnum*10])
         for i in range(factornum):
             factorname = self.factornamelst[i]
-            df_netval = self.dict_netval[factorname].copy() if considerfee == False else self.dict_trdnetval[factorname].copy()
-            weightlst = self.weightlst if considerfee == False else [f'trd{weightname}' for weightname in self.weightlst]
+            df_netval = self.dict_trdnetval[factorname].copy() if considerfee else self.dict_netval[factorname].copy()
+            weightlst = [f'trd {weight}' for weight in self.weightlst] if considerfee else self.weightlst
             df_netval.loc[:,'trddate'] = df_netval.loc[:,'trddate'].apply(lambda x: dt.datetime.strptime(x,'%Y%m%d').date())
             for j in range(weightnum):
-                baseweightname = self.weightlst[j]
-                weightname = weightlst[j]
-                df_netval_ = df_netval.loc[:,['trddate','id',weightname]]
+                baseweight,weight,excessweight = self.weightlst[j],weightlst[j],f'excess {weightlst[j]}'
+                df_netval_ = df_netval.loc[:,['trddate','id',weight,excessweight]]
                 idlst = list(df_netval_['id'].drop_duplicates().sort_values().values)
                 ax = axs[j,i] if factornum > 1 else axs[j]
                 for id in idlst:
-                    df_netval_id = df_netval_.loc[df_netval_['id'] == id,['trddate',weightname]]
-                    boolloc = (self.df_ratios['factorname'] == factorname)*(self.df_ratios['weight'] == baseweightname)*(self.df_ratios['id'] == id)
-                    tval = self.df_ratios.loc[boolloc,'rettval' if considerfee == False else 'trdrettval'].values[0]
-                    annret = self.df_ratios.loc[boolloc,'annret' if considerfee == False else 'anntrdret'].values[0]
+                    df_netval_id = df_netval_.loc[df_netval_['id'] == id,['trddate',weight]]
+                    boolloc = (self.df_ratios['factorname'] == factorname)*(self.df_ratios['weight'] == baseweight)*(self.df_ratios['id'] == id)
+                    tval = self.df_ratios.loc[boolloc,'trdrettval' if considerfee else 'rettval'].values[0]
+                    annret = self.df_ratios.loc[boolloc,'anntrdret' if considerfee else 'annret'].values[0]
                     groupname = id if id == 'longshort' else f'{id}st group'
                     linename = f'{groupname}-annual ret:{annret*100:.2f}%-tval:{tval:.2f}'
-                    ax.plot(df_netval_id['trddate'],df_netval_id[weightname],label = linename)
+                    ax.plot(df_netval_id['trddate'],df_netval_id[weight],label = linename)
                 ax.legend(loc = "upper left")
-                ax.set_title(f'factor {factorname}-{baseweightname} weighted',fontsize = 16)
-        fig.suptitle(f'Portfolio Cumulative Net Value',fontsize = 32)
+                ax.set_title(f'factor {factorname} ret-{baseweight} weighted',fontsize = 16)
+                ax = axs[j + weightnum,i] if factornum > 1 else axs[j + weightnum]
+                for id in idlst:
+                    df_netval_id = df_netval_.loc[df_netval_['id'] == id,['trddate',excessweight]]
+                    boolloc = (self.df_ratios['factorname'] == factorname)*(self.df_ratios['weight'] == baseweight)*(self.df_ratios['id'] == id)
+                    tval = self.df_ratios.loc[boolloc,'excesstrdrettval' if considerfee else 'excessrettval'].values[0]
+                    annret = self.df_ratios.loc[boolloc,'annexcesstrdret' if considerfee else 'annexcessret'].values[0]
+                    groupname = id if id == 'longshort' else f'{id}st group'
+                    linename = f'{groupname}-annual ret:{annret*100:.2f}%-tval:{tval:.2f}'
+                    ax.plot(df_netval_id['trddate'],df_netval_id[excessweight],label = linename)
+                ax.legend(loc = "upper left")
+                ax.set_title(f'factor {factorname} excess ret-{baseweight} weighted',fontsize = 16)
+        fig.suptitle(f'Portfolio Cumulative Net Value({'Fee Considered' if considerfee else 'Fee Unconsidered'})',fontsize = 32)
         plt.savefig(path)
         plt.close('all')
 
@@ -1571,7 +1642,7 @@ class SingleSort:
             # t值
             self.df_ratios.to_excel(writer,sheet_name = 'ratios',index = False)
             # 相关系数
-            self.factorcorr.to_excel(writer,sheet_name = 'corr',index = False)
+            self.df_corr.to_excel(writer,sheet_name = 'corr',index = False)
             for factorname in self.factornamelst:
                 # 分组收益率
                 self.dict_ret[factorname].to_excel(writer,sheet_name = f'{factorname}收益率',index = False)
