@@ -1446,13 +1446,14 @@ class SingleSort:
                 ax.set_title(f'factor {factorname} ret-{baseweight} weighted',fontsize = 16)
                 ax = axs[j + weightnum,i] if factornum > 1 else axs[j + weightnum]
                 for id in idlst:
-                    df_netval_id = df_netval_.loc[df_netval_['id'] == id,['trddate',excessweight]]
-                    boolloc = (self.df_ratios['factorname'] == factorname)*(self.df_ratios['weight'] == baseweight)*(self.df_ratios['id'] == id)
-                    tval = self.df_ratios.loc[boolloc,'excess trd rettval' if considerfee else 'excess rettval'].values[0]
-                    annret = self.df_ratios.loc[boolloc,'excess trd annret' if considerfee else 'excess annret'].values[0]
-                    groupname = id if id == 'longshort' else f'{id}st group'
-                    linename = f'{groupname}-annual ret:{annret*100:.2f}%-tval:{tval:.2f}'
-                    ax.plot(df_netval_id['trddate'],df_netval_id[excessweight],label = linename)
+                    if id != 'longshort':
+                        df_netval_id = df_netval_.loc[df_netval_['id'] == id,['trddate',excessweight]]
+                        boolloc = (self.df_ratios['factorname'] == factorname)*(self.df_ratios['weight'] == baseweight)*(self.df_ratios['id'] == id)
+                        tval = self.df_ratios.loc[boolloc,'excess trd rettval' if considerfee else 'excess rettval'].values[0]
+                        annret = self.df_ratios.loc[boolloc,'excess trd annret' if considerfee else 'excess annret'].values[0]
+                        groupname = f'{id}st group'
+                        linename = f'{groupname}-annual ret:{annret*100:.2f}%-tval:{tval:.2f}'
+                        ax.plot(df_netval_id['trddate'],df_netval_id[excessweight],label = linename)
                 ax.legend(loc = "upper left")
                 ax.set_title(f'factor {factorname} excess ret-{baseweight} weighted',fontsize = 16)
         fig.suptitle(f'Portfolio Cumulative Net Value({'Fee Considered' if considerfee else 'Fee Unconsidered'})',fontsize = 32)
