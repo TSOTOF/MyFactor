@@ -249,14 +249,19 @@ class MyFactor:
         return df_factor
 
     @staticmethod
-    def fillna(df_factor:pd.DataFrame,limit:int = 10)->pd.DataFrame:
+    def fillna(df_factor:pd.DataFrame,method:str = 'ffill',limit:Optional[int] = 10)->pd.DataFrame:
         '''
-        填充堆栈的非平衡面板缺失值(对于上市前的数据为空的情况不做填充,默认最多向后填充10条缺失数据)
+        填充堆栈的非平衡面板缺失值
 
         参数:
             df_factor:符合MyFactor.stdformat输出要求的因子表
 
-            limit:前向填充缺失值的最大数量,默认为10条
+            method:填充缺失值方法,共三种.
+                zfill:用0填充,此时limit参数失效
+                bfill:使用空值后第一个非空值填充
+                ffill:使用空值前第一个非空值填充
+
+            limit:填充缺失值的最大数量,默认为10条
 
         输出:
             df_factor:DataFrame,填充缺失值之后的df_factor,符合MyFactor.stdformat输出要求的因子表
@@ -267,8 +272,16 @@ class MyFactor:
         df_factor = df_factor.set_index(['date','code'])
         # 增加的trddate*code
         df_factor = df_factor.reindex(newidx).sort_index()
-        # 根据code分组填充,使用日期前面的的数据填充,最多填充10条
-        df_factor = df_factor.groupby('code',group_keys = False).apply(lambda x: x.ffill(limit = limit))
+        # 填充空值
+        match method:
+            case 'zfill':
+                df_factor = df_factor.zfill()
+            case 'bfill':
+                df_factor = df_factor.groupby('code',group_keys = False).apply(lambda x: x.bfill(limit = limit))
+            case 'ffill':
+                df_factor = df_factor.groupby('code',group_keys = False).apply(lambda x: x.ffill(limit = limit))
+            case _:
+                raise ValueError('Unsupported fill method')
         # 去除因子值全部空的行(一个因子也没填充成功的行)
         df_factor = df_factor.loc[~df_factor.isna().any(axis = 1)].reset_index()
         return df_factor
