@@ -269,13 +269,13 @@ class MyFactor:
         # 无缺失数据时的trddate*code
         newidx = set(product(set(df_factor['trddate']),set(df_factor['code'])))
         # 原始trddate*code
-        df_factor = df_factor.set_index(['date','code'])
+        df_factor = df_factor.set_index(['trddate','code'])
         # 增加的trddate*code
         df_factor = df_factor.reindex(newidx).sort_index()
         # 填充空值
         match method:
             case 'zfill':
-                df_factor = df_factor.zfill()
+                df_factor = df_factor.fillna(0)
             case 'bfill':
                 df_factor = df_factor.groupby('code',group_keys = False).apply(lambda x: x.bfill(limit = limit))
             case 'ffill':
