@@ -46,6 +46,8 @@ class MyFactor:
                 self.price = 'adjclose' if stkprice is None else stkprice
             elif loadtrd == 'fund':
                 self.price = 'adjnav'
+            else:
+                raise ValueError('Unsupported loadtrd value')
             self.idx_trd = self.getassettrd('idx',['close'],start,end)
             self.idx_trd = self.idx_trd.loc[self.idx_trd['code'] == idxname,['trddate','close']].reset_index(drop = True)
             self.idx_trd.columns = ['trddate','idxprice']
@@ -53,8 +55,6 @@ class MyFactor:
             self.df_trd = self.df_trd.merge(self.idx_trd,on = 'trddate',how = 'left')
         elif loadtrd is None:
             self.price,self.df_trd,self.idx_trd = None,None,None
-        else:
-            raise ValueError('Unsupported loadtrd value')
 
     @staticmethod
     def cumret(ret:Union[list,np.array,pd.Series])->float:
@@ -213,7 +213,7 @@ class MyFactor:
         将所有非交易日的日期转化为下一个最近的交易日,因子数据统一转化为float类型
 
         参数:
-            df_factor:堆栈格式的因子表,size = [T*N,2 + factornum]
+            df_factor:堆栈格式的因子表,shape = [T*N,2 + factornum]
                 第1列为日期,datatime.date或int或str,str格式为'%Y-%m-%d'或'%Y%m%d'(这时候不需要再改变格式)
                 第2列为资产代码,str
                 其余各列为因子值,float或bool
@@ -221,7 +221,7 @@ class MyFactor:
             trdcalendar:交易日历,trdcalendar的维数为1,values为str,格式为'%Y%m%d'
 
         输出:
-            df_factor:格式化后的因子表,size = [T*N,2 + factornum]
+            df_factor:格式化后的因子表,shape = [T*N,2 + factornum]
                 第1列为交易日,str,格式为'%Y%m%d',列名为trddate
                 第2列为资产代码,str,列名为code
                 其余各列为因子值,float
@@ -1427,23 +1427,27 @@ class SingleSort:
         '''获取考虑交易费用的分组净值'''
         return self.dict_trdnetval
 
-    def plot_ret(self,path:str,considerfee:bool = False):
+    def plot_ret(self,path:str,considerfee:bool = True,weightlst:Optional[List[str]] = None):
         '''
         画出分组累计净值
         
         参数:
             path:包含图片名的path
             considerfee:False时输出不考虑交易费用的累计净值,True时输出考虑交易费用的累计净值
+            weightlst:图片输出的加权方式,此项不为空时可以选择输出哪些分组加权方式的回测结果,如['single'],['single','size']
         '''
-        factornum,weightnum = len(self.factornamelst),len(self.weightlst)
+        currweightlst = self.weightlst if weightlst is None else weightlst
+        factornum,weightnum = len(self.factornamelst),len(currweightlst)
         fig,axs = plt.subplots(weightnum*2,factornum,figsize = [factornum*10,weightnum*10])
         for i in range(factornum):
             factorname = self.factornamelst[i]
+            icmean = self.df_icir.loc[self.df_icir['factorname'] == factorname,'avgic(%)']
+            icir = self.df_icir.loc[self.df_icir['factorname'] == factorname,'ir']
             df_netval = self.dict_trdnetval[factorname].copy() if considerfee else self.dict_netval[factorname].copy()
-            weightlst = [f'trd {weight}' for weight in self.weightlst] if considerfee else self.weightlst
+            weightlst = [f'trd {weight}' for weight in currweightlst] if considerfee else currweightlst
             df_netval.loc[:,'trddate'] = df_netval.loc[:,'trddate'].apply(lambda x: dt.datetime.strptime(x,'%Y%m%d').date())
             for j in range(weightnum):
-                baseweight,weight,excessweight = self.weightlst[j],weightlst[j],f'excess {weightlst[j]}'
+                baseweight,weight,excessweight = currweightlst[j],weightlst[j],f'excess {weightlst[j]}'
                 df_netval_ = df_netval.loc[:,['trddate','id',weight,excessweight]]
                 idlst = list(df_netval_['id'].drop_duplicates().sort_values().values)
                 ax = axs[j,i] if factornum > 1 else axs[j]
@@ -1456,7 +1460,7 @@ class SingleSort:
                     linename = f'{groupname}-annual ret:{annret*100:.2f}%-tval:{tval:.2f}'
                     ax.plot(df_netval_id['trddate'],df_netval_id[weight],label = linename)
                 ax.legend(loc = "upper left")
-                ax.set_title(f'factor {factorname} ret-{baseweight} weighted',fontsize = 16)
+                ax.set_title(f'{factorname} group ret({baseweight} weighted)-icmean:{icmean:.2f}%-icir:{icir:.2f}',fontsize = 16)
                 ax = axs[j + weightnum,i] if factornum > 1 else axs[j + weightnum]
                 for id in idlst:
                     if id != 'longshort':
@@ -1465,10 +1469,10 @@ class SingleSort:
                         tval = self.df_ratios.loc[boolloc,'excess trd rettval' if considerfee else 'excess rettval'].values[0]
                         annret = self.df_ratios.loc[boolloc,'excess trd annret' if considerfee else 'excess annret'].values[0]
                         groupname = f'{id}st group'
-                        linename = f'{groupname}-annual ret:{annret*100:.2f}%-tval:{tval:.2f}'
+                        linename = f'{groupname}-annret:{annret*100:.2f}%-tval:{tval:.2f}'
                         ax.plot(df_netval_id['trddate'],df_netval_id[excessweight],label = linename)
                 ax.legend(loc = "upper left")
-                ax.set_title(f'factor {factorname} excess ret-{baseweight} weighted',fontsize = 16)
+                ax.set_title(f'{factorname} group excess ret({baseweight} weighted)-icmean:{icmean:.2f}%-icir:{icir:.2f}',fontsize = 16)
         fig.suptitle(f'Portfolio Cumulative Net Value({'Fee Considered' if considerfee else 'Fee Unconsidered'})',fontsize = 32)
         plt.savefig(path)
         plt.close('all')
