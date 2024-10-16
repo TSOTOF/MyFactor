@@ -1303,8 +1303,8 @@ class SingleSort:
         df_icir:因子ICIR,共6列
             第1列为factorname:str,因子名
             第2列为时序平均股票和因子数据条数:int
-            第3列为avgic(%):float,因子时序平均ic
-            第4列为avgrankic(%):float,因子时序平均rankic
+            第3列为avg ic(%):float,因子时序平均ic
+            第4列为avg rankic(%):float,因子时序平均rankic
             第5列为ir:float
             第6列为rankir:float
 
@@ -1441,8 +1441,8 @@ class SingleSort:
         fig,axs = plt.subplots(weightnum*2,factornum,figsize = [factornum*10,weightnum*10])
         for i in range(factornum):
             factorname = self.factornamelst[i]
-            icmean = self.df_icir.loc[self.df_icir['factorname'] == factorname,'avgic(%)']
-            icir = self.df_icir.loc[self.df_icir['factorname'] == factorname,'ir']
+            icmean = self.df_icir.loc[self.df_icir['factorname'] == factorname,'avg ic(%)'].values[0]
+            icir = self.df_icir.loc[self.df_icir['factorname'] == factorname,'ir'].values[0]
             df_netval = self.dict_trdnetval[factorname].copy() if considerfee else self.dict_netval[factorname].copy()
             weightlst = [f'trd {weight}' for weight in currweightlst] if considerfee else currweightlst
             df_netval.loc[:,'trddate'] = df_netval.loc[:,'trddate'].apply(lambda x: dt.datetime.strptime(x,'%Y%m%d').date())
