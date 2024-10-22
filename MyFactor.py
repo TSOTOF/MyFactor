@@ -1441,8 +1441,6 @@ class SingleSort:
         fig,axs = plt.subplots(weightnum*2,factornum,figsize = [factornum*10,weightnum*10])
         for i in range(factornum):
             factorname = self.factornamelst[i]
-            icmean = self.df_icir.loc[self.df_icir['factorname'] == factorname,'avg ic(%)'].values[0]
-            icir = self.df_icir.loc[self.df_icir['factorname'] == factorname,'ir'].values[0]
             df_netval = self.dict_trdnetval[factorname].copy() if considerfee else self.dict_netval[factorname].copy()
             weightlst = [f'trd {weight}' for weight in currweightlst] if considerfee else currweightlst
             df_netval.loc[:,'trddate'] = df_netval.loc[:,'trddate'].apply(lambda x: dt.datetime.strptime(x,'%Y%m%d').date())
@@ -1460,7 +1458,7 @@ class SingleSort:
                     linename = f'{groupname}-annual ret:{annret*100:.2f}%-tval:{tval:.2f}'
                     ax.plot(df_netval_id['trddate'],df_netval_id[weight],label = linename)
                 ax.legend(loc = "upper left")
-                ax.set_title(f'{factorname} group ret({baseweight} weighted)-icmean:{icmean:.2f}%-icir:{icir:.2f}',fontsize = 16)
+                ax.set_title(f'{factorname} group ret({baseweight} weighted)',fontsize = 16)
                 ax = axs[j + weightnum,i] if factornum > 1 else axs[j + weightnum]
                 for id in idlst:
                     if id != 'longshort':
@@ -1472,7 +1470,7 @@ class SingleSort:
                         linename = f'{groupname}-annret:{annret*100:.2f}%-tval:{tval:.2f}'
                         ax.plot(df_netval_id['trddate'],df_netval_id[excessweight],label = linename)
                 ax.legend(loc = "upper left")
-                ax.set_title(f'{factorname} group excess ret({baseweight} weighted)-icmean:{icmean:.2f}%-icir:{icir:.2f}',fontsize = 16)
+                ax.set_title(f'{factorname} group excess ret({baseweight} weighted)',fontsize = 16)
         fig.suptitle(f'Portfolio Cumulative Net Value({'Fee Considered' if considerfee else 'Fee Unconsidered'})',fontsize = 32)
         plt.savefig(path)
         plt.close('all')
